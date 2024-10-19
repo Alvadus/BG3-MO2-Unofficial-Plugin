@@ -6,6 +6,7 @@ from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
 
 from ..basic_features import BasicGameSaveGameInfo, BasicModDataChecker, GlobPatterns
 from ..basic_features.basic_save_game_info import BasicGameSaveGame
+from ..basic_features.utils import is_directory
 from ..basic_game import BasicGame
 
 from .baldursgate3 import modSettings
@@ -39,13 +40,30 @@ class BG3ModDataChecker(BasicModDataChecker):
             )
         )
 
-    def dataLooksValid(self, filetree: mobase.IFileTree) -> mobase.ModDataChecker.CheckReturn:
-        return mobase.ModDataChecker.VALID
+    _extra_move_patterns = {
+        "*.dll": "Root/bin/",
+    }
 
-# class BG3GamePlugin(mobase.GamePlugins, ABC):
-#     def __init__(self, organizer: mobase.IOrganizer):
-#         super().__init__()
-#         self._organizer = organizer
+    def dataLooksValid(
+        self, filetree: mobase.IFileTree
+    ) -> mobase.ModDataChecker.CheckReturn:
+        parent = filetree.parent()
+        if parent is not None and self.dataLooksValid(parent) is self.FIXABLE:
+            return self.FIXABLE
+
+        status = mobase.ModDataChecker.INVALID
+
+        if any(filetree.exists(p) for p in self._extra_move_patterns):
+            return mobase.ModDataChecker.FIXABLE
+        rp = self._regex_patterns
+        for entry in filetree:
+            name = entry.name().casefold()
+            if rp.move_match(name) is not None:
+                status = mobase.ModDataChecker.FIXABLE
+            elif rp.valid.match(name):
+                if status is mobase.ModDataChecker.INVALID:
+                    status = mobase.ModDataChecker.VALID
+        return status
 
 class BG3Game(BasicGame):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
