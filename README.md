@@ -1,7 +1,7 @@
 # Introduction
 Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 modding.
 
-# Using this with [Root Builder](https://www.nexusmods.com/skyrimspecialedition/mods/31720) is recommended
+# Using this with [Root Builder](https://www.nexusmods.com/skyrimspecialedition/mods/31720) is recommended!
 
 # Features
 - Automatic generation of Mods Load Order.
@@ -10,7 +10,7 @@ Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 moddin
 - Overwrite generation for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.
 
 # Possible features in the future
-- Support for [mod.io](https://mod.io/g/baldursgate3) mods
+- Support for [mod.io](https://mod.io/g/baldursgate3) mods, for [Wabbajack](https://www.wabbajack.org/) modlist authors.
 - Profile saves, as in avoid loading base game saves when loading the game.
 - Support for WIP Toolkit unpacked mods.
 
