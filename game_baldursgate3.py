@@ -8,6 +8,8 @@ from ..basic_features import BasicGameSaveGameInfo, BasicModDataChecker, GlobPat
 from ..basic_features.basic_save_game_info import BasicGameSaveGame
 from ..basic_game import BasicGame
 
+from .baldursgate3 import modSettings
+
 class BG3ModDataChecker(BasicModDataChecker):
     def __init__(self):
         super().__init__(
@@ -27,7 +29,6 @@ class BG3ModDataChecker(BasicModDataChecker):
                 move={
                     # PAK Mods
                     "*.pak": "PAK_FILES/",
-                    # "*": "PAK_FILES/",
                     # Script Extender Config Mods
                     "*.json": "SE_CONFIG/",
                     "BG3MCM": "SE_CONFIG/",
@@ -38,14 +39,17 @@ class BG3ModDataChecker(BasicModDataChecker):
             )
         )
 
-class BG3GamePlugin(mobase.GamePlugins, ABC):
-    def __init__(self, organizer: mobase.IOrganizer):
-        super().__init__()
-        self._organizer = organizer
+    def dataLooksValid(self, filetree: mobase.IFileTree) -> mobase.ModDataChecker.CheckReturn:
+        return mobase.ModDataChecker.VALID
+
+# class BG3GamePlugin(mobase.GamePlugins, ABC):
+#     def __init__(self, organizer: mobase.IOrganizer):
+#         super().__init__()
+#         self._organizer = organizer
 
 class BG3Game(BasicGame):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
-    Author = "Dragozino"
+    Author = "Alvadus"
 
     def version(self):
         return mobase.VersionInfo(0, 0, 1, mobase.ReleaseType.PRE_ALPHA)
@@ -64,7 +68,10 @@ class BG3Game(BasicGame):
     GameSteamId = 1086940
     GameGogId = 1456460669
 
-    def init(self, organizer: mobase.IOrganizer):
+    def __init__(self):
+        super().__init__()
+
+    def init(self, organizer: mobase.IOrganizer) -> bool:
         super().init(organizer)
         self._register_feature(BG3ModDataChecker())
         self._register_feature(BasicGameSaveGameInfo(lambda s: s.with_suffix(".webp")))
@@ -76,12 +83,12 @@ class BG3Game(BasicGame):
     def mappings(self) -> list[mobase.Mapping]:
         mods_path = Path(self._organizer.modsPath())
 
-        pak_mods = self.get_mods_from_type("PAK_FILES")
-        se_mods = self.get_mods_from_type("SE_CONFIG")
+        pak_mods = self._get_mods_from_type("PAK_FILES")
+        se_mods = self._get_mods_from_type("SE_CONFIG")
 
         return []
 
-    def get_mods_from_type(self, mod_type: str):
+    def _get_mods_from_type(self, mod_type: str):
         mods_path = Path(self._organizer.modsPath())
         all_mods = self._organizer.modList().allModsByProfilePriority()
 
