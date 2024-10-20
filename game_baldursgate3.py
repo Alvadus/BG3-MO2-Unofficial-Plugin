@@ -4,7 +4,6 @@ from pathlib import Path
 
 import mobase
 from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
-from PyQt6.QtGui import QImage
 
 from ..basic_features import BasicGameSaveGameInfo, BasicModDataChecker, GlobPatterns, BasicLocalSavegames
 from ..basic_features.basic_save_game_info import BasicGameSaveGame
@@ -111,6 +110,34 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
             lambda s: s.with_suffix(".webp")
         ))
         self._register_feature(BasicLocalSavegames(self.savesDirectory()))
+
+        self._organizer.onAboutToRun(self.onAboutToRun) # on Executable Start
+        self._organizer.onFinishedRun(self.onFinishedRun)  # on Executable Stop
+        self._organizer.modList().onModInstalled(self.onModInstalled)  # on Mod Installed
+        self._organizer.modList().onModRemoved(self.onModRemoved)  # on Mod Removed
+
+        self._organizer.onUserInterfaceInitialized(self.onUserInterfaceLoad) # on Mod Organizer 2 Load
+        self._organizer.onProfileCreated(self.onProfileCreated) # on Profile Created
+
+        return True
+
+    def onAboutToRun(self, executable: str):
+        modSettings.generate_mod_settings(self._organizer.modList(), self._organizer.profile())
+        return True
+
+    def onFinishedRun(self, executable: str, exit_code: int, error: str = ""):
+        return True
+
+    def onModInstalled(self, mod: str):
+        return True
+
+    def onModRemoved(self, mod: str):
+        return True
+
+    def onUserInterfaceLoad(self, window):
+        return True
+
+    def onProfileCreated(self, profile_name: str):
         return True
 
     def iniFiles(self):
