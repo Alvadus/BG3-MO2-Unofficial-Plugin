@@ -11,7 +11,6 @@ Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 moddin
 
 # Possible features in the future
 - Support for [mod.io](https://mod.io/g/baldursgate3) mods, for [Wabbajack](https://www.wabbajack.org/) modlist authors.
-- Profile saves, as in avoid loading base game saves when loading the game.
 - Support for WIP Toolkit unpacked mods.
 
 # How to install?
