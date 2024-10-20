@@ -1,10 +1,12 @@
 from abc import ABC
+import os
 from pathlib import Path
 
 import mobase
 from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
+from PyQt6.QtGui import QImage
 
-from ..basic_features import BasicGameSaveGameInfo, BasicModDataChecker, GlobPatterns
+from ..basic_features import BasicGameSaveGameInfo, BasicModDataChecker, GlobPatterns, BasicLocalSavegames
 from ..basic_features.basic_save_game_info import BasicGameSaveGame
 from ..basic_features.utils import is_directory
 from ..basic_game import BasicGame
@@ -65,7 +67,7 @@ class BG3ModDataChecker(BasicModDataChecker):
                     status = mobase.ModDataChecker.VALID
         return status
 
-class BG3Game(BasicGame):
+class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
 
@@ -80,31 +82,73 @@ class BG3Game(BasicGame):
     GameBinary = r"bin\bg3.exe"
     GameDataPath = r"Data"
     GameSavesDirectory = r"%LOCALAPPDATA%\\Larian Studios\\Baldur's Gate 3\\PlayerProfiles\\Public\\Savegames\\Story\\"
+    GameDocumentsDirectory = r"%LOCALAPPDATA%\\Larian Studios\\Baldur's Gate 3\\PlayerProfiles\\Public\\"
     GameSaveExtension = "lsv"
 
     GameNexusId = 3474
     GameSteamId = 1086940
     GameGogId = 1456460669
 
+    _mods_paths = {
+        "PAK_FILES": {
+            "pattern": "*.pak",
+            "pathName": "Mods"
+        },
+        "SE_CONFIG": {
+            "pattern": "*",
+            "pathName": "Script Extender"
+        },
+    }
+
     def __init__(self):
-        super().__init__()
+        BasicGame.__init__(self)
+        mobase.IPluginFileMapper.__init__(self)
 
     def init(self, organizer: mobase.IOrganizer) -> bool:
         super().init(organizer)
         self._register_feature(BG3ModDataChecker())
-        self._register_feature(BasicGameSaveGameInfo(lambda s: s.with_suffix(".webp")))
+        self._register_feature(BasicGameSaveGameInfo(
+            lambda s: s.with_suffix(".webp")
+        ))
+        self._register_feature(BasicLocalSavegames(self.savesDirectory()))
         return True
 
     def iniFiles(self):
         return ["modsettings.lsx"]
 
     def mappings(self) -> list[mobase.Mapping]:
-        mods_path = Path(self._organizer.modsPath())
+        map = []
+        modlist = self._organizer.modList()
 
-        pak_mods = self._get_mods_from_type("PAK_FILES")
-        se_mods = self._get_mods_from_type("SE_CONFIG")
+        appdata_path = QDir(os.getenv("LOCALAPPDATA") + "/Larian Studios/Baldur's Gate 3/")
 
-        return []
+        if not QDir(appdata_path.absoluteFilePath("Script Extender")).exists(): appdata_path.mkdir("Script Extender")
+        if not QDir(appdata_path.absoluteFilePath("Mods")).exists(): appdata_path.mkdir("Mods")
+
+        for mod_type, mod_map_data in self._mods_paths.items():
+            mod_pattern = mod_map_data["pattern"]
+            mod_destpath = mod_map_data["pathName"]
+
+            for modName in self._get_mods_from_type(mod_type):
+                mod_path = Path(modlist.getMod(modName).absolutePath()) / mod_type
+                mod_files = list(mod_path.glob(mod_pattern))
+
+                for file in mod_files:
+                    map.append(mobase.Mapping(
+                        source=str(file),
+                        destination=os.path.join(appdata_path.absoluteFilePath(mod_destpath), str(file.name)),
+                        is_directory=file.is_dir(),
+                        create_target=True,
+                    ))
+
+        map.append(mobase.Mapping(
+            source=self._organizer.profile().absolutePath() + "/modsettings.lsx",
+            destination=os.path.join(appdata_path.absoluteFilePath("PlayerProfiles/Public"), "modsettings.lsx"),
+            is_directory=False,
+            create_target=True,
+        ))
+
+        return map
 
     def _get_mods_from_type(self, mod_type: str):
         mods_path = Path(self._organizer.modsPath())
