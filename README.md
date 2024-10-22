@@ -1,3 +1,6 @@
+
+# [.NET 8.0](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-8.0.3-windows-x64-installer) is required for this plugin to work.
+
 # Introduction
 Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 modding.
 
