@@ -1,11 +1,17 @@
 from abc import ABC
 import os
+import json
 from pathlib import Path
 
-import mobase
+import mobase # type: ignore
 from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
 
-from ..basic_features import BasicGameSaveGameInfo, BasicModDataChecker, GlobPatterns, BasicLocalSavegames
+from ..basic_features import (
+    BasicGameSaveGameInfo,
+    BasicModDataChecker,
+    GlobPatterns,
+    BasicLocalSavegames,
+)
 from ..basic_features.basic_save_game_info import BasicGameSaveGame
 from ..basic_features.utils import is_directory
 from ..basic_game import BasicGame
@@ -102,6 +108,13 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
     def __init__(self):
         BasicGame.__init__(self)
         mobase.IPluginFileMapper.__init__(self)
+        
+    def create_modscache(self, profile_path):
+        profile_path = Path(profile_path)
+        mod_cache_path = profile_path / "modsCache.json"
+        if not mod_cache_path.exists():
+            with open(mod_cache_path, "w") as f:
+                json.dump({}, f)
 
     def init(self, organizer: mobase.IOrganizer) -> bool:
         super().init(organizer)
@@ -122,7 +135,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onAboutToRun(self, executable: str):
-        modSettings.generate_mod_settings(self._organizer.modList(), self._organizer.profile())
+        modSettings.generate_mod_settings(self._organizer, self._organizer.modList(), self._organizer.profile())
         return True
 
     def onFinishedRun(self, executable: str, exit_code: int, error: str = ""):
@@ -135,9 +148,13 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onUserInterfaceLoad(self, window):
+        self.create_modscache(self._organizer.profile().absolutePath())
         return True
 
-    def onProfileCreated(self, profile_name: str):
+    def onProfileCreated(self, profile: mobase.IProfile):
+        profile_path = Path(profile.absolutePath())
+        print(profile_path)
+        self.create_modscache(profile_path)
         return True
 
     def iniFiles(self):
@@ -149,8 +166,12 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
 
         appdata_path = QDir(os.getenv("LOCALAPPDATA") + "/Larian Studios/Baldur's Gate 3/")
 
-        if not QDir(appdata_path.absoluteFilePath("Script Extender")).exists(): appdata_path.mkdir("Script Extender")
-        if not QDir(appdata_path.absoluteFilePath("Mods")).exists(): appdata_path.mkdir("Mods")
+        required_dirs = ["Script Extender", "Mods"]
+        for dir_name in required_dirs:
+            dir_path = appdata_path.absoluteFilePath(dir_name)
+            if not QDir(dir_path).exists():
+                if not appdata_path.mkdir(dir_name):
+                    qDebug(f"Failed to create directory: {dir_path}")
 
         for mod_type, mod_map_data in self._mods_paths.items():
             mod_pattern = mod_map_data["pattern"]
