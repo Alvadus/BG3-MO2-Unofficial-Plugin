@@ -85,25 +85,27 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     
     mods_children = ET.SubElement(mods_node, "children")
     
-    for modName, mod_data in mod_settings.items():
-        for file_name, metadata in sorted(mod_data.items()):
-            if modName != "GustavDev":
-                mod_order_node = ET.SubElement(mods_order_node, "children")
-                mod_order_node.set("id", "Module")
-                attribute = ET.SubElement(mod_order_node, "attribute")
-                attribute.set("id", "UUID")       
-                attribute.set("value", metadata.get("UUID", {}).get("value", ""))
-                attribute.set("type", metadata.get("UUID", {}).get("type", ""))
+    for modName in modlist.allModsByProfilePriority():
+        if modlist.state(modName) & mobase.ModState.ACTIVE != 0:
+            mod_data = mod_settings.get(modName, {})
+            for file_name, metadata in sorted(mod_data.items(), key=lambda x: x[0]):
+                if modName != "GustavDev":
+                    mod_order_node = ET.SubElement(mods_order_node, "children")
+                    mod_order_node.set("id", "Module")
+                    attribute = ET.SubElement(mod_order_node, "attribute")
+                    attribute.set("id", "UUID")       
+                    attribute.set("value", metadata.get("UUID", {}).get("value", ""))
+                    attribute.set("type", metadata.get("UUID", {}).get("type", ""))
     
-            mod_node = ET.SubElement(mods_children, "node")
-            mod_node.set("id", "ModuleShortDesc")
-            for attr_id, attr_data in metadata.items():
-                if attr_id == "Override":
-                    continue
-                attribute = ET.SubElement(mod_node, "attribute")
-                attribute.set("id", attr_id)
-                attribute.set("type", attr_data["type"])
-                attribute.set("value", str(attr_data["value"]))
+                mod_node = ET.SubElement(mods_children, "node")
+                mod_node.set("id", "ModuleShortDesc")
+                for attr_id, attr_data in metadata.items():
+                    if attr_id == "Override":
+                        continue
+                    attribute = ET.SubElement(mod_node, "attribute")
+                    attribute.set("id", attr_id)
+                    attribute.set("type", attr_data["type"])
+                    attribute.set("value", str(attr_data["value"]))
     
     xml_str = ET.tostring(root, encoding='unicode')
     dom = minidom.parseString(xml_str)
