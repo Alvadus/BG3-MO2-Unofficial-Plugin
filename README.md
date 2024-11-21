@@ -1,10 +1,12 @@
 
-# [.NET 8.0](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-8.0.3-windows-x64-installer) is required for this plugin to work.
+> [!IMPORTANT]
+> [Visual C++ x64](https://aka.ms/vs/17/release/vc_redist.x64.exe), [.NET Runtime 8.X.X Desktop x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0), [.NET 6.0 Runtime Desktop x64](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-6.0.30-windows-x64-installer) are required for this plugin to work.
 
 # Introduction
 Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 modding.
 
-# Using this with [Root Builder](https://www.nexusmods.com/skyrimspecialedition/mods/31720) is recommended!
+> [!NOTE]
+> Using this with [Root Builder](https://www.nexusmods.com/skyrimspecialedition/mods/31720) is recommended!
 
 # Features
 - Automatic generation of Mods Load Order.
