@@ -139,6 +139,34 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onFinishedRun(self, executable: str, exit_code: int, error: str = ""):
+        appdata_path = Path(os.getenv("LOCALAPPDATA")) / "Larian Studios" / "Baldur's Gate 3" / "Script Extender"
+        
+        if appdata_path.exists() and any(appdata_path.iterdir()):
+            overwrite_path = Path(self._organizer.overwritePath()) / "SE_CONFIG"
+            overwrite_path.mkdir(parents=True, exist_ok=True)
+
+            for file in appdata_path.glob("**/*"):
+                if file.is_file():
+                    rel_path = file.relative_to(appdata_path)
+                    dest_file = overwrite_path / rel_path
+                    
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    try:
+                        dest_file.write_bytes(file.read_bytes())
+                        file.unlink()
+                        
+                        parent = file.parent
+                        while parent != appdata_path:
+                            try:
+                                parent.rmdir()
+                                parent = parent.parent
+                            except OSError:
+                                break
+                                
+                    except Exception as e:
+                        qDebug(f"Failed to move {file} to overwrite: {str(e)}")
+
         return True
 
     def onModInstalled(self, mod: str):
