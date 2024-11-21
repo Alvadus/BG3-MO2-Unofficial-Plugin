@@ -75,9 +75,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-
-    def version(self):
-        return mobase.VersionInfo(0, 0, 1, mobase.ReleaseType.PRE_ALPHA)
+    Version = "0.5.1"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
