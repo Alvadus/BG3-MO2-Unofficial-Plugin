@@ -99,7 +99,8 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
             mod_node = ET.SubElement(mods_children, "node")
             mod_node.set("id", "ModuleShortDesc")
             for attr_id, attr_data in metadata.items():
-                # if attr_id != "Override":  # Skip override flag 
+                if attr_id == "Override":
+                    continue
                 attribute = ET.SubElement(mod_node, "attribute")
                 attribute.set("id", attr_id)
                 attribute.set("type", attr_data["type"])
@@ -143,11 +144,51 @@ def _extract_pak(file):
     return output_dir
 
 
+def check_override_pak(pak_path):
+    command = [
+        str(divine_file),
+        "-a", "list-package",
+        "-g", "bg3",
+        "-s", str(pak_path),
+    ]
+    
+    try:
+        result = subprocess.run(
+            command,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        
+        if result.returncode != 0:
+            return False
+            
+        list_package_output = result.stdout
+        
+        if 'ScriptExtender' in list_package_output:
+            return False
+        
+        base_game_folders = [
+            'Public/Game/',
+            'Public/GUI/',
+        ]
+        
+        for folder in base_game_folders:
+            if folder in list_package_output:
+                return True
+                    
+        return False
+        
+    except Exception as e:
+        qDebug(f"Error checking override status: {str(e)}")
+        return False
+
 def _get_metadata(modName, file, profile_path):
     _default_attributes = ["Folder", "MD5", "Name", "PublishHandle", "UUID", "Version64", "Version"]
     cache_json_path = os.path.join(profile_path, "modsCache.json")
 
-    # Read cache with lock
     with cache_lock:
         if not os.path.exists(cache_json_path):
             mods_cache = {}
@@ -172,43 +213,15 @@ def _get_metadata(modName, file, profile_path):
                 root = tree.getroot()
                 module_info_node = root.find(".//node[@id='ModuleInfo']")
                 
-                mod_folder = module_info_node.find(".//attribute[@id='Folder']").attrib['value']
-                
-                command = [
-                    str(divine_file),
-                    "-a", "list-package",
-                    "-g", "bg3",
-                    "-s", str(file),
-                ]
-                
-                result = subprocess.run(
-                    command,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True
-                )
-                
-                if result.returncode != 0:
-                    return None
-                
-                list_package_output = result.stdout
-                
-                mod_folder_exists = f"Public/{mod_folder}" in list_package_output
-                
-                if not mod_folder_exists and any(f"Public/{mod_folder}" in list_package_output for folder in ["Game", "GUI"]) or not mod_folder_exists and any(f"Mods/{mod_folder}" in list_package_output for folder in ["MainUI"]):
-                    meta_data["Override"] = True
+                meta_data["Override"] = check_override_pak(file)
 
-            for attribute in _default_attributes:
-                element = module_info_node.find(f"./attribute[@id='{attribute}']")
-                if element is not None:
-                    meta_data[attribute] = {
-                        'value': element.attrib['value'],
-                        'type': element.attrib.get('type')
-                    }
-            
-            
+                for attribute in _default_attributes:
+                    element = module_info_node.find(f"./attribute[@id='{attribute}']")
+                    if element is not None:
+                        meta_data[attribute] = {
+                            'value': element.attrib['value'],
+                            'type': element.attrib.get('type')
+                        }
 
         with cache_lock:
             with open(cache_json_path, "r") as f:
