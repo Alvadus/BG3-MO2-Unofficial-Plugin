@@ -62,7 +62,6 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                 
     mod_settings_file = Path(organizer.profile().absolutePath()) / "modsettings.lsx"
     
-    # Create XML structure
     root = ET.Element("save")
     version = ET.SubElement(root, "version")
     version.set("major", "4")
@@ -144,7 +143,7 @@ def _extract_pak(file):
     return output_dir
 
 
-def check_override_pak(pak_path):
+def check_override_pak(pak_path, module_info_node):
     command = [
         str(divine_file),
         "-a", "list-package",
@@ -167,16 +166,48 @@ def check_override_pak(pak_path):
             
         list_package_output = result.stdout
         
-        if 'ScriptExtender' in list_package_output:
-            return False
-        
-        base_game_folders = [
-            'Public/Game/',
-            'Public/GUI/',
+        ignored_paths = [
+            'Game/GUI/Assets',
+            'ScriptExtender'
         ]
         
-        for folder in base_game_folders:
-            if folder in list_package_output:
+        builtin_folders = [
+            'Public/Shared/',
+            'Public/SharedDev/',
+            'Public/Gustav/',
+            'Public/GustavDev/',
+            'Public/MainUI/',
+            'Public/ModBrowser/',
+            'Public/DiceSet_01/',
+            'Public/DiceSet_02/',
+            'Public/DiceSet_03/',
+            'Public/DiceSet_04/',
+            'Public/DiceSet_06/',
+            'Public/Honour/',
+            'Public/Engine/',
+            'Public/Game/',
+            'Public/FW3/'
+        ]
+        
+        if module_info_node is not None:
+            folder_element = module_info_node.find(".//attribute[@id='Folder']")
+            if folder_element is not None:
+                folder_name = folder_element.attrib['value']
+                mods_folder_path = f"Mods/{folder_name}"
+                
+                files_in_folder = [
+                    line.strip() 
+                    for line in list_package_output.splitlines()
+                    if mods_folder_path in line
+                ]
+                
+                if files_in_folder and len(files_in_folder) > 1:
+                    return False
+                
+        for line in list_package_output.splitlines():
+            if any(ignored in line for ignored in ignored_paths):
+                continue
+            if any(folder in line for folder in builtin_folders):
                 return True
                     
         return False
@@ -213,7 +244,7 @@ def _get_metadata(modName, file, profile_path):
                 root = tree.getroot()
                 module_info_node = root.find(".//node[@id='ModuleInfo']")
                 
-                meta_data["Override"] = check_override_pak(file)
+                meta_data["Override"] = check_override_pak(file, module_info_node)
 
                 for attribute in _default_attributes:
                     element = module_info_node.find(f"./attribute[@id='{attribute}']")
