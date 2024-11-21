@@ -12,7 +12,7 @@ Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 moddin
 - Automatic generation of Mods Load Order.
 - Support for mods that contain multiple .pak files.
 - Support for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.
-- ~~Overwrite generation for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.~~
+- Overwrite generation for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.
 
 # Planned features in the future if possible:
 - Support for [mod.io](https://mod.io/g/baldursgate3) mods, for [Wabbajack](https://www.wabbajack.org/) modlist authors.
