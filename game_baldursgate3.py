@@ -75,7 +75,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "0.5.3"
+    Version = "0.5.4"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -199,15 +199,29 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                 if not appdata_path.mkdir(dir_name):
                     qDebug(f"Failed to create directory: {dir_path}")
 
+        # Handle regular mods
         for mod_type, mod_map_data in self._mods_paths.items():
             mod_pattern = mod_map_data["pattern"]
             mod_destpath = mod_map_data["pathName"]
 
+            # Handle mods from mod directory
             for modName in self._get_mods_from_type(mod_type):
                 mod_path = Path(modlist.getMod(modName).absolutePath()) / mod_type
                 mod_files = list(mod_path.glob(mod_pattern))
 
                 for file in mod_files:
+                    map.append(mobase.Mapping(
+                        source=str(file),
+                        destination=os.path.join(appdata_path.absoluteFilePath(mod_destpath), str(file.name)),
+                        is_directory=file.is_dir(),
+                        create_target=True,
+                    ))
+
+            # Handle files from overwrite directory
+            overwrite_path = Path(self._organizer.overwritePath()) / mod_type
+            if overwrite_path.exists():
+                overwrite_files = list(overwrite_path.glob(mod_pattern))
+                for file in overwrite_files:
                     map.append(mobase.Mapping(
                         source=str(file),
                         destination=os.path.join(appdata_path.absoluteFilePath(mod_destpath), str(file.name)),

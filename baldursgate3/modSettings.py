@@ -67,7 +67,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     version.set("major", "4")
     version.set("minor", "7")
     version.set("revision", "1")
-    version.set("build", "3")
+    version.set("build", "300")
     
     region = ET.SubElement(root, "region")
     region.set("id", "ModuleSettings")
@@ -77,25 +77,38 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     
     children = ET.SubElement(root_node, "children")
     
-    mods_order_node = ET.SubElement(children, "node")
-    mods_order_node.set("id", "ModOrder")
+    if len(mod_settings) > 1:
+        mods_order_node = ET.SubElement(children, "node")
+        mods_order_node.set("id", "ModOrder")
     
     mods_node = ET.SubElement(children, "node")
     mods_node.set("id", "Mods")
     
     mods_children = ET.SubElement(mods_node, "children")
     
+    gustav_data = mod_settings.get("GustavDev", {}).get("GustavDev", {})
+    if gustav_data:
+        gustav_node = ET.SubElement(mods_children, "node")
+        gustav_node.set("id", "ModuleShortDesc")
+        for attr_id, attr_data in gustav_data.items():
+            attribute = ET.SubElement(gustav_node, "attribute")
+            attribute.set("id", attr_id)
+            attribute.set("type", attr_data["type"])
+            attribute.set("value", str(attr_data["value"]))
+
+    if "GustavDev" in mod_settings:
+        del mod_settings["GustavDev"]
+    
     for modName in modlist.allModsByProfilePriority():
         if modlist.state(modName) & mobase.ModState.ACTIVE != 0:
             mod_data = mod_settings.get(modName, {})
             for file_name, metadata in sorted(mod_data.items(), key=lambda x: x[0]):
-                if modName != "GustavDev":
-                    mod_order_node = ET.SubElement(mods_order_node, "children")
-                    mod_order_node.set("id", "Module")
-                    attribute = ET.SubElement(mod_order_node, "attribute")
-                    attribute.set("id", "UUID")       
-                    attribute.set("value", metadata.get("UUID", {}).get("value", ""))
-                    attribute.set("type", metadata.get("UUID", {}).get("type", ""))
+                mod_order_node = ET.SubElement(mods_order_node, "children")
+                mod_order_node.set("id", "Module")
+                attribute = ET.SubElement(mod_order_node, "attribute")
+                attribute.set("id", "UUID")       
+                attribute.set("value", metadata.get("UUID", {}).get("value", ""))
+                attribute.set("type", metadata.get("UUID", {}).get("type", ""))
     
                 mod_node = ET.SubElement(mods_children, "node")
                 mod_node.set("id", "ModuleShortDesc")
