@@ -129,6 +129,41 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     
     return True
 
+def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profile: mobase.IProfile, mod: str):
+    cache_json_path = Path(profile.absolutePath()) / "modsCache.json"
+    modName = mod.name()
+    
+    if cache_json_path:
+        with open(cache_json_path, "r") as f:
+            mods_cache = json.load(f)
+            
+            mod_data = mods_cache.get(modName)
+            if not mod_data:
+                print("Generating metadata for mod")
+                
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = []
+                    mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
+                    mod_files = list(mod_path.glob("*.pak"))
+                    for file in mod_files:
+                        futures.append(
+                            executor.submit(_get_metadata, modName, file, profile.absolutePath())
+                        )
+                        
+                for future in as_completed(futures):
+                    try:
+                        meta_data = future.result()
+                        if meta_data:
+                            qDebug(f"Successfully processed mod metadata: {meta_data}")
+                            
+                    except Exception as e:
+                        qDebug(f"Error processing file: {str(e)}")
+                
+            print(mods_cache.get(modName))
+            return True      
+    else:
+        return False
+
 def _extract_pak(file):
 
     temp_dir = Path(__file__).resolve().parent / 'temp_extracted'
@@ -152,6 +187,7 @@ def _extract_pak(file):
         check=True
     )
     
+    # return None
     if result.returncode != 0:
         return None
     

@@ -133,6 +133,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onAboutToRun(self, executable: str):
+        self.create_modscache(self._organizer.profile().absolutePath())
         modSettings.generate_mod_settings(self._organizer, self._organizer.modList(), self._organizer.profile())
         return True
 
@@ -168,6 +169,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onModInstalled(self, mod: str):
+        modSettings.mod_installed(self._organizer, self._organizer.modList(), self._organizer.profile(), mod)
         return True
 
     def onModRemoved(self, mod: str):
