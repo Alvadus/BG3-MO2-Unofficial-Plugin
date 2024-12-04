@@ -15,7 +15,7 @@ Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 moddin
 - Overwrite generation for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.
 
 # Planned features in the future if possible:
-- Support for [mod.io](https://mod.io/g/baldursgate3) mods, for [Wabbajack](https://www.wabbajack.org/) modlist authors.
+- Support for [mod.io](https://mod.io/g/baldursgate3) mods, intended for [Wabbajack](https://www.wabbajack.org/) modlists.
 - Support for WIP Toolkit unpacked mods.
 
 # How to install?
