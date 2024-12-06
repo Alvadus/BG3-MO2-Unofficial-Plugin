@@ -34,11 +34,11 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     }
     
     mod_settings["GustavDev"] = Gustav_Dev
-    
+
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = []
         for modName in modlist.allModsByProfilePriority():
-            if modlist.state(modName) & mobase.ModState.ACTIVE != 0:
+            if modlist.state(modName):
                 mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
                 mod_files = list(mod_path.glob("*.pak"))
                 for file in mod_files:
@@ -53,12 +53,12 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                     qDebug(f"Successfully processed mod metadata: {meta_data}")
                     
                     if meta_data["metadata"] and not meta_data["metadata"].get("Override"):
-                        if meta_data["modName"] not in mod_settings:
+                        if meta_data["modName"] not in mod_settings & (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
                             mod_settings[meta_data["modName"]] = {}
                         mod_settings[meta_data["modName"]][meta_data["file"]] = meta_data["metadata"]
                     
             except Exception as e:
-                qDebug(f"Error processing file: {str(e)}")
+                qDebug(f"Error processing file: {str(e).encode('utf-8')}") 
                 
     mod_settings_file = Path(organizer.profile().absolutePath()) / "modsettings.lsx"
     
@@ -100,7 +100,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
         del mod_settings["GustavDev"]
     
     for modName in modlist.allModsByProfilePriority():
-        if modlist.state(modName) & mobase.ModState.ACTIVE != 0:
+        if modlist.state(modName) & (int(modlist.state(modName) / 2) % 2 != 0):
             mod_data = mod_settings.get(modName, {})
             for file_name, metadata in sorted(mod_data.items(), key=lambda x: x[0]):
                 mod_order_node = ET.SubElement(mods_order_node, "children")
@@ -157,7 +157,7 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
                             qDebug(f"Successfully processed mod metadata: {meta_data}")
                             
                     except Exception as e:
-                        qDebug(f"Error processing file: {str(e)}")
+                        qDebug(f"Error processing file: {str(e).encode('utf-8')}")
                 
             print(mods_cache.get(modName))
             return True      
@@ -264,7 +264,7 @@ def check_override_pak(pak_path, module_info_node):
         return False
         
     except Exception as e:
-        qDebug(f"Error checking override status: {str(e)}")
+        qDebug(f"Error checking override status: {str(e).encode('utf-8')}")
         return False
 
 def _get_metadata(modName, file, profile_path):
@@ -349,6 +349,6 @@ def _fix_modscache(organizer: mobase.IOrganizer):
             with open(cache_json_path, "w") as f:
                 json.dump(mods_cache, f, indent=4)
     except Exception as e:
-        qDebug(f"Failed to fix mods cache: {str(e)}")
+        qDebug(f"Failed to fix mods cache: {str(e).encode('utf-8')}")
         return False
     return True
