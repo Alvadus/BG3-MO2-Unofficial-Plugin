@@ -53,7 +53,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                     qDebug(f"Successfully processed mod metadata: {meta_data}")
                     
                     if meta_data["metadata"] and not meta_data["metadata"].get("Override"):
-                        if meta_data["modName"] not in mod_settings & (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
+                        if meta_data["modName"] not in mod_settings and (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
                             mod_settings[meta_data["modName"]] = {}
                         mod_settings[meta_data["modName"]][meta_data["file"]] = meta_data["metadata"]
                     
@@ -100,7 +100,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
         del mod_settings["GustavDev"]
     
     for modName in modlist.allModsByProfilePriority():
-        if modlist.state(modName) & (int(modlist.state(modName) / 2) % 2 != 0):
+        if modlist.state(modName) and (int(modlist.state(modName) / 2) % 2 != 0):
             mod_data = mod_settings.get(modName, {})
             for file_name, metadata in sorted(mod_data.items(), key=lambda x: x[0]):
                 mod_order_node = ET.SubElement(mods_order_node, "children")
