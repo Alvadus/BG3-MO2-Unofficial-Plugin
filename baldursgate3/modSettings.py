@@ -52,7 +52,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                 if meta_data:
                     qDebug(f"Successfully processed mod metadata: {meta_data}")
                     
-                    if meta_data["metadata"] and not meta_data["metadata"].get("Override"):
+                    if meta_data["metadata"] and not meta_data["metadata"].get("Override") or meta_data["metadata"] and meta_data["metadata"].get("Override") and meta_data["metadata"].get("LoadOrder"):
                         if meta_data["modName"] not in mod_settings and (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
                             mod_settings[meta_data["modName"]] = {}
                         mod_settings[meta_data["modName"]][meta_data["file"]] = meta_data["metadata"]
@@ -113,7 +113,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                 mod_node = ET.SubElement(mods_children, "node")
                 mod_node.set("id", "ModuleShortDesc")
                 for attr_id, attr_data in metadata.items():
-                    if attr_id == "Override":
+                    if attr_id == "Override" or attr_id == "LoadOrder":
                         continue
                     attribute = ET.SubElement(mod_node, "attribute")
                     attribute.set("id", attr_id)
@@ -240,11 +240,18 @@ def check_override_pak(pak_path, module_info_node):
             'Public/FW3/'
         ]
         
+        override = {
+            "Override": False,
+            "LoadOrder": False
+        }
+        
         if module_info_node is not None:
             folder_element = module_info_node.find(".//attribute[@id='Folder']")
             if folder_element is not None:
                 folder_name = folder_element.attrib['value']
                 mods_folder_path = f"Mods/{folder_name}"
+                
+                public_folder_path = f"Public/{folder_name}"
                 
                 files_in_folder = [
                     line.strip() 
@@ -253,15 +260,21 @@ def check_override_pak(pak_path, module_info_node):
                 ]
                 
                 if files_in_folder and len(files_in_folder) > 1:
-                    return False
+                    override["Override"] = False
                 
         for line in list_package_output.splitlines():
             if any(ignored in line for ignored in ignored_paths):
                 continue
             if any(folder in line for folder in builtin_folders):
-                return True
+                 override["Override"] = True     
+                 if public_folder_path in list_package_output:
+                    override["LoadOrder"] = True
+                 
+                 return override
                     
-        return False
+        override["Override"] = False
+        
+        return override
         
     except Exception as e:
         qDebug(f"Error checking override status: {str(e).encode('utf-8')}")
@@ -295,7 +308,9 @@ def _get_metadata(modName, file, profile_path):
                 root = tree.getroot()
                 module_info_node = root.find(".//node[@id='ModuleInfo']")
                 
-                meta_data["Override"] = check_override_pak(file, module_info_node)
+                meta_data.update(check_override_pak(file, module_info_node))
+                # meta_data["Override"] = check_override_pak(file, module_info_node, "Override")
+                # meta_data["LoadOrder_Include"] = check_override_pak(file, module_info_node, "LoadOrder")
 
                 for attribute in _default_attributes:
                     element = module_info_node.find(f"./attribute[@id='{attribute}']")
