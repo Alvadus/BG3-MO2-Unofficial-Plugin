@@ -8,11 +8,11 @@ from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
 
 from ..basic_features import (
     BasicGameSaveGameInfo,
+    BasicLocalSavegames,
     BasicModDataChecker,
     GlobPatterns,
-    BasicLocalSavegames,
 )
-from ..basic_features.basic_save_game_info import BasicGameSaveGame
+# from ..basic_features.basic_save_game_info import BasicGameSaveGame
 from ..basic_features.utils import is_directory
 from ..basic_game import BasicGame
 
@@ -75,7 +75,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "0.6.0"
+    Version = "0.6.5"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -84,8 +84,8 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
 
     GameBinary = r"bin\bg3.exe"
     GameDataPath = r"Data"
-    GameSavesDirectory = r"%LOCALAPPDATA%\\Larian Studios\\Baldur's Gate 3\\PlayerProfiles\\Public\\Savegames\\Story\\"
-    GameDocumentsDirectory = r"%LOCALAPPDATA%\\Larian Studios\\Baldur's Gate 3\\PlayerProfiles\\Public\\"
+    GameSavesDirectory = "%USERPROFILE%/AppData/Local/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story"
+    GameDocumentsDirectory = "%USERPROFILE%/AppData/Local/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/"
     GameSaveExtension = "lsv"
 
     GameNexusId = 3474
@@ -120,7 +120,9 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         self._register_feature(BasicGameSaveGameInfo(
             lambda s: s.with_suffix(".webp")
         ))
-        self._register_feature(BasicLocalSavegames(self.savesDirectory()))
+        self._register_feature(
+            BasicLocalSavegames(self.savesDirectory())
+        )
 
         self._organizer.onAboutToRun(self.onAboutToRun) # on Executable Start
         self._organizer.onFinishedRun(self.onFinishedRun)  # on Executable Stop
