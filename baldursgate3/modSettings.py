@@ -47,18 +47,18 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                     )
         
         for future in as_completed(futures):
-            try:
-                meta_data = future.result()
-                if meta_data:
-                    qDebug(f"Successfully processed mod metadata: {meta_data}")
-                    
+            
+            meta_data = future.result()
+            if meta_data:
+                try:
+                    qDebug(f"Successfully processed mod metadata")
                     if meta_data["metadata"] and not meta_data["metadata"].get("Override") or meta_data["metadata"] and meta_data["metadata"].get("Override") and meta_data["metadata"].get("LoadOrder"):
                         if meta_data["modName"] not in mod_settings and (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
                             mod_settings[meta_data["modName"]] = {}
                         mod_settings[meta_data["modName"]][meta_data["file"]] = meta_data["metadata"]
-                    
-            except Exception as e:
-                qDebug(f"Error processing file: {str(e).encode('utf-8')}") 
+                        
+                except Exception as e:
+                    qDebug(f"Error processing file: {str(e)}")
                 
     mod_settings_file = Path(organizer.profile().absolutePath()) / "modsettings.lsx"
     
@@ -134,7 +134,7 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
     modName = mod.name()
     
     if cache_json_path:
-        with open(cache_json_path, "r") as f:
+        with open(cache_json_path, "r", encoding="utf-8") as f:
             mods_cache = json.load(f)
             
             mod_data = mods_cache.get(modName)
@@ -154,10 +154,37 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
                     try:
                         meta_data = future.result()
                         if meta_data:
-                            qDebug(f"Successfully processed mod metadata: {meta_data}")
+                            qDebug(f"Successfully processed mod metadata")
+                            # {{ edit_1 }}: Update the cache with new file metadata
+                            if modName not in mods_cache:
+                                mods_cache[modName] = {"Files": {}}
+                            mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
                             
                     except Exception as e:
-                        qDebug(f"Error processing file: {str(e).encode('utf-8')}")
+                        qDebug(f"Error processing file: {str(e)}")
+            else:
+                # {{ edit_2 }}: Check for new files and update the cache
+                mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
+                mod_files = list(mod_path.glob("*.pak"))
+                existing_files = mod_data.get("Files", {})
+                
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = []
+                    for file in mod_files:
+                        if file.name not in existing_files:
+                            futures.append(
+                                executor.submit(_get_metadata, modName, file, profile.absolutePath())
+                            )
+                            
+                for future in as_completed(futures):
+                    try:
+                        meta_data = future.result()
+                        if meta_data:
+                            qDebug(f"Successfully processed new mod metadata")
+                            mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
+                            
+                    except Exception as e:
+                        qDebug(f"Error processing file: {str(e)}")
                 
             print(mods_cache.get(modName))
             return True      
@@ -223,6 +250,7 @@ def check_override_pak(pak_path, module_info_node):
         ]
         
         builtin_folders = [
+            'Public/'
             'Public/Shared/',
             'Public/SharedDev/',
             'Public/Gustav/',
@@ -277,7 +305,7 @@ def check_override_pak(pak_path, module_info_node):
         return override
         
     except Exception as e:
-        qDebug(f"Error checking override status: {str(e).encode('utf-8')}")
+        qDebug(f"Error checking override status: {str(e)}")
         return False
 
 def _get_metadata(modName, file, profile_path):
@@ -288,7 +316,7 @@ def _get_metadata(modName, file, profile_path):
         if not os.path.exists(cache_json_path):
             mods_cache = {}
         else:
-            with open(cache_json_path, "r") as f:
+            with open(cache_json_path, "r", encoding="utf-8") as f:
                 mods_cache = json.load(f)
         
         if not mods_cache.get(modName):
@@ -309,8 +337,6 @@ def _get_metadata(modName, file, profile_path):
                 module_info_node = root.find(".//node[@id='ModuleInfo']")
                 
                 meta_data.update(check_override_pak(file, module_info_node))
-                # meta_data["Override"] = check_override_pak(file, module_info_node, "Override")
-                # meta_data["LoadOrder_Include"] = check_override_pak(file, module_info_node, "LoadOrder")
 
                 for attribute in _default_attributes:
                     element = module_info_node.find(f"./attribute[@id='{attribute}']")
@@ -321,7 +347,7 @@ def _get_metadata(modName, file, profile_path):
                         }
 
         with cache_lock:
-            with open(cache_json_path, "r") as f:
+            with open(cache_json_path, "r", encoding="utf-8") as f:
                 mods_cache = json.load(f)
             
             if not mods_cache.get(modName):
@@ -329,8 +355,8 @@ def _get_metadata(modName, file, profile_path):
             
             mods_cache[modName]["Files"][file_str] = meta_data
             
-            with open(cache_json_path, "w") as f:
-                json.dump(mods_cache, f, indent=4)
+            with open(cache_json_path, "w", encoding="utf-8") as f:
+                json.dump(mods_cache, f, indent=4, ensure_ascii=False)
 
         return {"modName": modName, "file": file.name, "metadata": meta_data}
 
@@ -344,26 +370,47 @@ def _fix_modscache(organizer: mobase.IOrganizer):
         cache_json_path = profile_path / "modsCache.json"
 
         if not cache_json_path.exists():
+            qDebug(f"{cache_json_path} does not exist. Exiting.")
             return True
 
-        with open(cache_json_path, "r") as f:
+        with open(cache_json_path, "r", encoding="utf-8") as f:
             mods_cache = json.load(f)
 
         modlist = organizer.modList()
         installed_mods = {mod: True for mod in modlist.allMods()}
-        
+
         mods_to_remove = []
-        for mod_name in mods_cache:
+        for mod_name, mod_data in mods_cache.items():
             if mod_name not in installed_mods:
                 mods_to_remove.append(mod_name)
-        
-        if mods_to_remove:
-            for mod_name in mods_to_remove:
-                del mods_cache[mod_name]
-            
-            with open(cache_json_path, "w") as f:
-                json.dump(mods_cache, f, indent=4)
+                continue
+
+            mod_path = Path(modlist.getMod(mod_name).absolutePath()) / "PAK_FILES"
+            if not mod_path.exists():
+                qDebug(f"Mod path {mod_path} does not exist. Skipping {mod_name}.")
+                continue
+
+            current_files = set(file.name for file in mod_path.glob("*.pak"))
+            cached_files = set(mod_data.get("Files", {}).keys())
+
+            missing_files = cached_files - current_files
+            for missing_file in missing_files:
+                qDebug(f"Removing missing file {missing_file} from {mod_name}.")
+                del mod_data["Files"][missing_file]
+
+            if not mod_data["Files"]:
+                mods_to_remove.append(mod_name)
+
+        for mod_name in mods_to_remove:
+            qDebug(f"Removing mod {mod_name} from mods cache.")
+            del mods_cache[mod_name]
+
+        with open(cache_json_path, "w", encoding="utf-8") as f:
+            json.dump(mods_cache, f, indent=4, ensure_ascii=False)
+
+        qDebug("Successfully fixed mods cache.")
+        return True
+
     except Exception as e:
-        qDebug(f"Failed to fix mods cache: {str(e).encode('utf-8')}")
+        qDebug(f"Failed to fix mods cache: {str(e)}")
         return False
-    return True
