@@ -9,6 +9,7 @@ from tabnanny import check
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
 import threading
+import multiprocessing
 
 import mobase # type: ignore
 from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
@@ -35,7 +36,8 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     
     mod_settings["GustavDev"] = Gustav_Dev
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    max_workers = min(multiprocessing.cpu_count(), 16)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for modName in modlist.allModsByProfilePriority():
             if modlist.state(modName):
@@ -141,7 +143,8 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
             if not mod_data:
                 print("Generating metadata for mod")
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                max_workers = min(multiprocessing.cpu_count(), 16)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
                     mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
                     mod_files = list(mod_path.glob("*.pak"))
@@ -155,7 +158,6 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
                         meta_data = future.result()
                         if meta_data:
                             qDebug(f"Successfully processed mod metadata")
-                            # {{ edit_1 }}: Update the cache with new file metadata
                             if modName not in mods_cache:
                                 mods_cache[modName] = {"Files": {}}
                             mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
@@ -163,12 +165,12 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
                     except Exception as e:
                         qDebug(f"Error processing file: {str(e)}")
             else:
-                # {{ edit_2 }}: Check for new files and update the cache
                 mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
                 mod_files = list(mod_path.glob("*.pak"))
                 existing_files = mod_data.get("Files", {})
                 
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                max_workers = min(multiprocessing.cpu_count(), 16)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
                     for file in mod_files:
                         if file.name not in existing_files:
@@ -196,7 +198,13 @@ def _extract_pak(file):
     temp_dir = Path(__file__).resolve().parent / 'temp_extracted'
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    output_dir = temp_dir / file.name
+    import hashlib
+    file_hash = hashlib.md5(str(file).encode()).hexdigest()[:10]
+    output_dir = temp_dir / file_hash
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     command = [
         str(divine_file),
@@ -214,14 +222,20 @@ def _extract_pak(file):
         check=True
     )
     
-    # return None
     if result.returncode != 0:
         return None
     
     return output_dir
 
-
 def check_override_pak(pak_path, module_info_node):
+    cache_key = str(pak_path)
+    
+    if hasattr(check_override_pak, 'cache') and cache_key in check_override_pak.cache:
+        return check_override_pak.cache[cache_key]
+    
+    if not hasattr(check_override_pak, 'cache'):
+        check_override_pak.cache = {}
+    
     command = [
         str(divine_file),
         "-a", "list-package",
@@ -256,6 +270,8 @@ def check_override_pak(pak_path, module_info_node):
             'Public/Gustav/',
             'Public/GustavDev/',
             'Public/MainUI/',
+            'Public/CrossplayUI'
+            'Public/PhotoMode'
             'Public/ModBrowser/',
             'Public/DiceSet_01/',
             'Public/DiceSet_02/',
@@ -302,6 +318,7 @@ def check_override_pak(pak_path, module_info_node):
                     
         override["Override"] = False
         
+        check_override_pak.cache[cache_key] = override
         return override
         
     except Exception as e:
@@ -313,15 +330,16 @@ def _get_metadata(modName, file, profile_path):
     cache_json_path = os.path.join(profile_path, "modsCache.json")
 
     with cache_lock:
-        if not os.path.exists(cache_json_path):
-            mods_cache = {}
-        else:
+        if os.path.exists(cache_json_path):
             with open(cache_json_path, "r", encoding="utf-8") as f:
                 mods_cache = json.load(f)
-        
-        if not mods_cache.get(modName):
-            print(f"No cache found for {modName}")
-            mods_cache[modName] = {"Files": {}}
+                if modName in mods_cache and file.name in mods_cache[modName].get("Files", {}):
+                    cached_data = mods_cache[modName]["Files"][file.name]
+                    return {"modName": modName, "file": file.name, "metadata": cached_data}
+        else:
+            mods_cache = {}
+            if not mods_cache.get(modName):
+                mods_cache[modName] = {"Files": {}}
     
     file_str = file.name
     extracted_pak = None
@@ -330,11 +348,23 @@ def _get_metadata(modName, file, profile_path):
         meta_data = {}
         extracted_pak = _extract_pak(file)
         if extracted_pak:
-            meta_file = next((os.path.join(root, "meta.lsx") for root, _, files in os.walk(extracted_pak) if "meta.lsx" in files), None)
-            if meta_file:
+            meta_files = list(extracted_pak.glob("**/meta.lsx"))
+            
+            if not meta_files:
+                qDebug(f"No meta.lsx files found in extracted PAK: {file.name}")
+                return {"modName": modName, "file": file.name, "metadata": {}}
+            
+            meta_file = str(meta_files[0])
+            qDebug(f"Found meta.lsx at: {meta_file}")
+            
+            try:
                 tree = ET.parse(meta_file)
                 root = tree.getroot()
                 module_info_node = root.find(".//node[@id='ModuleInfo']")
+                
+                if module_info_node is None:
+                    qDebug(f"No ModuleInfo node found in {meta_file}")
+                    return {"modName": modName, "file": file.name, "metadata": {}}
                 
                 meta_data.update(check_override_pak(file, module_info_node))
 
@@ -345,10 +375,16 @@ def _get_metadata(modName, file, profile_path):
                             'value': element.attrib['value'],
                             'type': element.attrib.get('type')
                         }
+            except ET.ParseError as e:
+                qDebug(f"Error parsing XML in {meta_file}: {str(e)}")
+                return {"modName": modName, "file": file.name, "metadata": {}}
 
         with cache_lock:
-            with open(cache_json_path, "r", encoding="utf-8") as f:
-                mods_cache = json.load(f)
+            try:
+                with open(cache_json_path, "r", encoding="utf-8") as f:
+                    mods_cache = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                mods_cache = {}
             
             if not mods_cache.get(modName):
                 mods_cache[modName] = {"Files": {}}
@@ -359,10 +395,15 @@ def _get_metadata(modName, file, profile_path):
                 json.dump(mods_cache, f, indent=4, ensure_ascii=False)
 
         return {"modName": modName, "file": file.name, "metadata": meta_data}
-
+    except Exception as e:
+        qDebug(f"Error in _get_metadata for {file.name}: {str(e)}")
+        return {"modName": modName, "file": file.name, "metadata": {}}
     finally:
         if extracted_pak and os.path.exists(extracted_pak):
-            shutil.rmtree(extracted_pak)
+            try:
+                shutil.rmtree(extracted_pak)
+            except Exception as e:
+                qDebug(f"Error cleaning up temp directory {extracted_pak}: {str(e)}")
 
 def _fix_modscache(organizer: mobase.IOrganizer):
     try:
@@ -413,4 +454,3 @@ def _fix_modscache(organizer: mobase.IOrganizer):
 
     except Exception as e:
         qDebug(f"Failed to fix mods cache: {str(e)}")
-        return False
