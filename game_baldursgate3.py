@@ -75,7 +75,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "0.6.5"
+    Version = "0.7.0"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -101,6 +101,10 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
             "pattern": "*",
             "pathName": "Script Extender"
         },
+        "LevelCache": {
+            "pattern": "*",
+            "pathName": "LevelCache"
+        }
     }
 
     def __init__(self):
@@ -140,9 +144,12 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onFinishedRun(self, executable: str, exit_code: int, error: str = ""):
-        appdata_path = Path(os.getenv("LOCALAPPDATA")) / "Larian Studios" / "Baldur's Gate 3" / "Script Extender"
+        # Handle Script Extender files
+        appdata_path = Path(os.getenv("LOCALAPPDATA")) / "Larian Studios" / "Baldur's Gate 3"
         
-        if appdata_path.exists() and any(appdata_path.iterdir()):
+        # Handle Script Extender configs
+        se_path = appdata_path / "Script Extender"
+        if se_path.exists() and any(se_path.iterdir()):
             overwrite_path = Path(self._organizer.overwritePath()) / "SE_CONFIG"
             overwrite_path.mkdir(parents=True, exist_ok=True)
 
@@ -167,6 +174,25 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                                 
                     except Exception as e:
                         qDebug(f"Failed to move {file} to overwrite: {str(e)}")
+
+        # Handle LevelCache files
+        levelcache_path = appdata_path / "LevelCache"
+        if levelcache_path.exists() and any(levelcache_path.iterdir()):
+            overwrite_path = Path(self._organizer.overwritePath()) / "LevelCache"
+            overwrite_path.mkdir(parents=True, exist_ok=True)
+
+            for file in levelcache_path.glob("**/*"):
+                if file.is_file():
+                    rel_path = file.relative_to(levelcache_path)
+                    dest_file = overwrite_path / rel_path
+                    
+                    if not dest_file.exists():
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            # Copy file to overwrite but don't delete the original
+                            dest_file.write_bytes(file.read_bytes())
+                        except Exception as e:
+                            qDebug(f"Failed to copy {file} to overwrite: {str(e)}")
 
         return True
 
@@ -196,7 +222,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
 
         appdata_path = QDir(os.getenv("LOCALAPPDATA") + "/Larian Studios/Baldur's Gate 3/")
 
-        required_dirs = ["Script Extender", "Mods"]
+        required_dirs = ["Script Extender", "Mods", "LevelCache"]
         for dir_name in required_dirs:
             dir_path = appdata_path.absoluteFilePath(dir_name)
             if not QDir(dir_path).exists():
