@@ -29,7 +29,3 @@ Download the latest release of the plugin, extract all the files inside "\plugin
 
 # Credits
 - Thanks to [Norbyte](https://github.com/Norbyte) for [LSLib](https://github.com/Norbyte/lslib), which allows this plugin to extract data from pak files in order to manage load order.
-- Thanks to [chazwarp923](https://github.com/chazwarp923) for [MO2-BG3-Plugin](https://github.com/chazwarp923/MO2-BG3-Plugin), my first published plugin was a fork of it which helped me get started with MO2 plugins
-
-
- 
