@@ -153,9 +153,9 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
             overwrite_path = Path(self._organizer.overwritePath()) / "SE_CONFIG"
             overwrite_path.mkdir(parents=True, exist_ok=True)
 
-            for file in appdata_path.glob("**/*"):
+            for file in se_path.glob("**/*"):
                 if file.is_file():
-                    rel_path = file.relative_to(appdata_path)
+                    rel_path = file.relative_to(se_path)
                     dest_file = overwrite_path / rel_path
                     
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
@@ -165,7 +165,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                         file.unlink()
                         
                         parent = file.parent
-                        while parent != appdata_path:
+                        while parent != se_path:
                             try:
                                 parent.rmdir()
                                 parent = parent.parent
