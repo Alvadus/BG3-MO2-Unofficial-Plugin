@@ -268,6 +268,7 @@ def check_override_pak(pak_path, module_info_node):
             'Public/Shared/',
             'Public/SharedDev/',
             'Public/Gustav/',
+            'Public/GustavX/',
             'Public/GustavDev/',
             'Public/MainUI/',
             'Public/CrossplayUI'
@@ -279,6 +280,7 @@ def check_override_pak(pak_path, module_info_node):
             'Public/DiceSet_04/',
             'Public/DiceSet_06/',
             'Public/Honour/',
+            'Public/HonourX/',
             'Public/Engine/',
             'Public/Game/',
             'Public/FW3/'
@@ -297,6 +299,9 @@ def check_override_pak(pak_path, module_info_node):
                 
                 public_folder_path = f"Public/{folder_name}"
                 
+                if public_folder_path in list_package_output:
+                    override["LoadOrder"] = True
+                
                 files_in_folder = [
                     line.strip() 
                     for line in list_package_output.splitlines()
@@ -304,8 +309,8 @@ def check_override_pak(pak_path, module_info_node):
                 ]
                 
                 if files_in_folder and len(files_in_folder) > 1:
-                    override["Override"] = False
-                
+                    override["LoadOrder"] = True
+                 
         for line in list_package_output.splitlines():
             if any(ignored in line for ignored in ignored_paths):
                 continue
