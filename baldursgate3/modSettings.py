@@ -53,14 +53,14 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
             meta_data = future.result()
             if meta_data:
                 try:
-                    qDebug(f"Successfully processed mod metadata")
+                    print(f"Successfully processed mod metadata")
                     if meta_data["metadata"] and not meta_data["metadata"].get("Override") or meta_data["metadata"] and meta_data["metadata"].get("Override") and meta_data["metadata"].get("LoadOrder"):
                         if meta_data["modName"] not in mod_settings and (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
                             mod_settings[meta_data["modName"]] = {}
                         mod_settings[meta_data["modName"]][meta_data["file"]] = meta_data["metadata"]
                         
                 except Exception as e:
-                    qDebug(f"Error processing file: {str(e)}")
+                    print(f"Error processing file: {str(e)}")
                 
     mod_settings_file = Path(organizer.profile().absolutePath()) / "modsettings.lsx"
     
@@ -123,6 +123,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                     attribute.set("value", str(attr_data["value"]))
     
     xml_str = ET.tostring(root, encoding='unicode')
+    # xml_str = ET.tostring(root, encoding='utf-8').decode('utf-8')
     dom = minidom.parseString(xml_str)
     formatted_xml = dom.toprettyxml(indent="  ", encoding='UTF-8')
     
@@ -157,13 +158,13 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
                     try:
                         meta_data = future.result()
                         if meta_data:
-                            qDebug(f"Successfully processed mod metadata")
+                            print(f"Successfully processed mod metadata")
                             if modName not in mods_cache:
                                 mods_cache[modName] = {"Files": {}}
                             mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
                             
                     except Exception as e:
-                        qDebug(f"Error processing file: {str(e)}")
+                        print(f"Error processing file: {str(e)}")
             else:
                 mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
                 mod_files = list(mod_path.glob("*.pak"))
@@ -182,11 +183,11 @@ def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profil
                     try:
                         meta_data = future.result()
                         if meta_data:
-                            qDebug(f"Successfully processed new mod metadata")
+                            print(f"Successfully processed new mod metadata")
                             mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
                             
                     except Exception as e:
-                        qDebug(f"Error processing file: {str(e)}")
+                        print(f"Error processing file: {str(e)}")
                 
             print(mods_cache.get(modName))
             return True      
@@ -327,7 +328,7 @@ def check_override_pak(pak_path, module_info_node):
         return override
         
     except Exception as e:
-        qDebug(f"Error checking override status: {str(e)}")
+        print(f"Error checking override status: {str(e)}")
         return False
 
 def _get_metadata(modName, file, profile_path):
@@ -356,11 +357,11 @@ def _get_metadata(modName, file, profile_path):
             meta_files = list(extracted_pak.glob("**/meta.lsx"))
             
             if not meta_files:
-                qDebug(f"No meta.lsx files found in extracted PAK: {file.name}")
+                print(f"No meta.lsx files found in extracted PAK: {file.name}")
                 return {"modName": modName, "file": file.name, "metadata": {}}
             
             meta_file = str(meta_files[0])
-            qDebug(f"Found meta.lsx at: {meta_file}")
+            print(f"Found meta.lsx at: {meta_file}")
             
             try:
                 tree = ET.parse(meta_file)
@@ -368,7 +369,7 @@ def _get_metadata(modName, file, profile_path):
                 module_info_node = root.find(".//node[@id='ModuleInfo']")
                 
                 if module_info_node is None:
-                    qDebug(f"No ModuleInfo node found in {meta_file}")
+                    print(f"No ModuleInfo node found in {meta_file}")
                     return {"modName": modName, "file": file.name, "metadata": {}}
                 
                 meta_data.update(check_override_pak(file, module_info_node))
@@ -381,7 +382,7 @@ def _get_metadata(modName, file, profile_path):
                             'type': element.attrib.get('type')
                         }
             except ET.ParseError as e:
-                qDebug(f"Error parsing XML in {meta_file}: {str(e)}")
+                print(f"Error parsing XML in {meta_file}: {str(e)}")
                 return {"modName": modName, "file": file.name, "metadata": {}}
 
         with cache_lock:
@@ -401,14 +402,14 @@ def _get_metadata(modName, file, profile_path):
 
         return {"modName": modName, "file": file.name, "metadata": meta_data}
     except Exception as e:
-        qDebug(f"Error in _get_metadata for {file.name}: {str(e)}")
+        print(f"Error in _get_metadata for {file.name}: {str(e)}")
         return {"modName": modName, "file": file.name, "metadata": {}}
     finally:
         if extracted_pak and os.path.exists(extracted_pak):
             try:
                 shutil.rmtree(extracted_pak)
             except Exception as e:
-                qDebug(f"Error cleaning up temp directory {extracted_pak}: {str(e)}")
+                print(f"Error cleaning up temp directory {extracted_pak}: {str(e)}")
 
 def _fix_modscache(organizer: mobase.IOrganizer):
     try:
@@ -416,7 +417,7 @@ def _fix_modscache(organizer: mobase.IOrganizer):
         cache_json_path = profile_path / "modsCache.json"
 
         if not cache_json_path.exists():
-            qDebug(f"{cache_json_path} does not exist. Exiting.")
+            print(f"{cache_json_path} does not exist. Exiting.")
             return True
 
         with open(cache_json_path, "r", encoding="utf-8") as f:
@@ -433,7 +434,7 @@ def _fix_modscache(organizer: mobase.IOrganizer):
 
             mod_path = Path(modlist.getMod(mod_name).absolutePath()) / "PAK_FILES"
             if not mod_path.exists():
-                qDebug(f"Mod path {mod_path} does not exist. Skipping {mod_name}.")
+                print(f"Mod path {mod_path} does not exist. Skipping {mod_name}.")
                 continue
 
             current_files = set(file.name for file in mod_path.glob("*.pak"))
@@ -441,21 +442,21 @@ def _fix_modscache(organizer: mobase.IOrganizer):
 
             missing_files = cached_files - current_files
             for missing_file in missing_files:
-                qDebug(f"Removing missing file {missing_file} from {mod_name}.")
+                print(f"Removing missing file {missing_file} from {mod_name}.")
                 del mod_data["Files"][missing_file]
 
             if not mod_data["Files"]:
                 mods_to_remove.append(mod_name)
 
         for mod_name in mods_to_remove:
-            qDebug(f"Removing mod {mod_name} from mods cache.")
+            print(f"Removing mod {mod_name} from mods cache.")
             del mods_cache[mod_name]
 
         with open(cache_json_path, "w", encoding="utf-8") as f:
             json.dump(mods_cache, f, indent=4, ensure_ascii=False)
 
-        qDebug("Successfully fixed mods cache.")
+        print("Successfully fixed mods cache.")
         return True
 
     except Exception as e:
-        qDebug(f"Failed to fix mods cache: {str(e)}")
+        print(f"Failed to fix mods cache: {str(e)}")
