@@ -2,9 +2,17 @@ from abc import ABC
 import os
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import zipfile
+import tempfile
+import urllib.request
+import re
 
 import mobase # type: ignore
-from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
+from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug, QCoreApplication, Qt
+from PyQt6.QtWidgets import QMessageBox, QMainWindow, QApplication, QPushButton, QProgressDialog
+from PyQt6.QtCore import QCoreApplication
 
 from ..basic_features import (
     BasicGameSaveGameInfo,
@@ -27,6 +35,10 @@ class BG3ModDataChecker(BasicModDataChecker):
                     "SE_CONFIG",
                     "Generated",
                     "Root",
+                    "Localization",
+                    "Generated",
+                    "Public",
+                    "Mods",
                 ],
                 delete=[
                     "info.json",
@@ -75,7 +87,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "0.8.0"
+    Version = "0.9.0"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -133,9 +145,19 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         self._organizer.modList().onModInstalled(self.onModInstalled)  # on Mod Installed
         self._organizer.modList().onModRemoved(self.onModRemoved)  # on Mod Removed
 
+        # self._organizer.onNextRefresh(self.onRefresh)
+
         self._organizer.onUserInterfaceInitialized(self.onUserInterfaceLoad) # on Mod Organizer 2 Load
         self._organizer.onProfileCreated(self.onProfileCreated) # on Profile Created
 
+        return True
+    
+    def onRefresh(self):
+        hasDependencies = check_bg3_paths(self._organizer)
+
+        if hasDependencies is False:
+            return True
+        
         return True
 
     def onAboutToRun(self, executable: str):
@@ -195,7 +217,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                             qDebug(f"Failed to copy {file} to overwrite: {str(e)}")
 
         return True
-
+    
     def onModInstalled(self, mod: str):
         modSettings.mod_installed(self._organizer, self._organizer.modList(), self._organizer.profile(), mod)
         return True
@@ -205,6 +227,12 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
 
     def onUserInterfaceLoad(self, window):
         self.create_modscache(self._organizer.profile().absolutePath())
+            
+        hasDependencies = check_bg3_paths(self._organizer)
+
+        if hasDependencies is False:
+            return True
+        
         return True
 
     def onProfileCreated(self, profile: mobase.IProfile):
@@ -278,3 +306,95 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                 if mods_path.joinpath(modName, mod_type).exists():
                     mods.append(modName)
         return mods
+
+def check_bg3_paths(organizer):
+    base_dir = Path(__file__).parent / "baldursgate3"
+    temp_dir = base_dir / "temp_extracted"
+    tools_dir = base_dir / "tools"
+    divine_exe = tools_dir / "Divine.exe"
+
+    required_files = {
+        "CommandLineArgumentsParser.dll",
+        "Divine.dll",
+        "Divine.dll.config",
+        "Divine.exe",
+        "Divine.runtimeconfig.json",
+        "granny2.dll",
+        "LSLib.dll",
+        "LSLibNative.dll",
+        "LZ4.dll",
+        "LZ4pn.dll",
+        "Newtonsoft.Json.dll",
+        "OpenTK.Mathematics.dll",
+        "System.IO.Hashing.dll",
+        "ZstdSharp.dll",
+    }
+
+    if tools_dir.exists() and divine_exe.exists():
+        return True
+
+    main_window = organizer.mainWindow() if hasattr(organizer, "mainWindow") else None
+    msg_box = QMessageBox(main_window)
+    msg_box.setWindowTitle("Baldur's Gate 3 Plugin - Missing dependencies")
+    msg_box.setText("LSLib Tools are missing.\nThese are necessary for the plugin to work correctly.")
+    download_btn = msg_box.addButton("Download", QMessageBox.ButtonRole.DestructiveRole)
+    exit_btn = msg_box.addButton("Exit", QMessageBox.ButtonRole.ActionRole)
+    msg_box.setIcon(QMessageBox.Icon.Warning)
+    msg_box.exec()
+
+    if msg_box.clickedButton() == exit_btn:
+        subprocess.Popen(["taskkill", "/im", "ModOrganizer.exe", "/f"], creationflags=subprocess.CREATE_NO_WINDOW)
+        return False
+
+    progress = QProgressDialog("Downloading LSLib...", "Cancel", 0, 100, main_window)
+    progress.setWindowTitle("BG3 Plugin - Downloading")
+    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+    progress.show()
+
+    try:
+        zip_url = "https://github.com/Norbyte/lslib/releases/download/v1.19.5/ExportTool-v1.19.5.zip"
+        zip_filename = "ExportTool-v1.19.5.zip"
+        zip_path = Path(tempfile.gettempdir()) / zip_filename
+
+        def reporthook(block_num, block_size, total_size):
+            if total_size > 0:
+                read_so_far = block_num * block_size
+                percent = int(read_so_far * 100 / total_size)
+                progress.setValue(min(percent, 100))
+                QApplication.processEvents()
+
+        urllib.request.urlretrieve(zip_url, str(zip_path), reporthook)
+
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+
+        tools_source = next(
+            (p for p in temp_dir.rglob("Tools") if p.is_dir()),
+            None
+        )
+        if not tools_source:
+            raise RuntimeError("Could not find 'Tools' folder in the archive.")
+
+        tools_dir.mkdir(parents=True, exist_ok=True)
+
+        for file in tools_source.iterdir():
+            if file.name in required_files:
+                shutil.copy2(file, tools_dir / file.name)
+
+        progress.setValue(100)
+
+        try:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+        except Exception as cleanup_err:
+            qDebug(f"Failed to clean up temp_extracted: {cleanup_err}")
+
+    except Exception as e:
+        qDebug(f"Download failed: {e}")
+        err = QMessageBox(main_window)
+        err.setIcon(QMessageBox.Icon.Critical)
+        err.setText(f"Failed to download LSLib tools:\n{str(e)}")
+        err.exec()
+        return False
+
+    return True
