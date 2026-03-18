@@ -87,7 +87,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "0.9.0"
+    Version = "1.0.0"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -219,10 +219,12 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
     
     def onModInstalled(self, mod: str):
+        qDebug("BUCK U")
         modSettings.mod_installed(self._organizer, self._organizer.modList(), self._organizer.profile(), mod)
         return True
 
-    def onModRemoved(self, mod: str):
+    def onModRemoved(self, mod):
+        modSettings.mod_removed(self._organizer, self._organizer.profile(), mod)
         return True
 
     def onUserInterfaceLoad(self, window):
