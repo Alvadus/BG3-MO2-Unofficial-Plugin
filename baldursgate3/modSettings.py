@@ -1,40 +1,54 @@
-import os
+import hashlib
 import json
-import subprocess
+import multiprocessing
 import shutil
+import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from audioop import error
 from pathlib import Path
-from tabnanny import check
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
-import threading
-import multiprocessing
 
-import mobase # type: ignore
-from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug
+import mobase  # type: ignore
 
-divine_file = Path(__file__).resolve().parent / 'tools' / 'Divine.exe'
-
+divine_file = Path(__file__).resolve().parent / "tools" / "Divine.exe"
 cache_lock = threading.Lock()
+_DEFAULT_ATTRIBUTES = ("Folder", "MD5", "Name", "PublishHandle", "UUID", "Version64", "Version")
+_IGNORED_PATHS = ("Game/GUI/Assets", "ScriptExtender")
+_BUILTIN_FOLDERS = (
+    "Public/", "Public/Shared/", "Public/SharedDev/", "Public/Gustav/", "Public/GustavX/",
+    "Public/GustavDev/", "Public/MainUI/", "Public/CrossplayUI/", "Public/PhotoMode/",
+    "Public/ModBrowser/", "Public/DiceSet_01/", "Public/DiceSet_02/", "Public/DiceSet_03/",
+    "Public/DiceSet_04/", "Public/DiceSet_06/", "Public/Honour/", "Public/HonourX/",
+    "Public/Engine/", "Public/Game/", "Public/FW3/",
+)
+
+try:
+    _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+except AttributeError:
+    _CREATE_NO_WINDOW = 0
+
+
+def _add_module_attributes(parent, metadata, skip=frozenset({"Override", "LoadOrder"})):
+    for attr_id, attr_data in metadata.items():
+        if attr_id not in skip:
+            el = ET.SubElement(parent, "attribute")
+            el.set("id", attr_id)
+            el.set("type", attr_data["type"])
+            el.set("value", str(attr_data["value"]))
+
 
 def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList, profile: mobase.IProfile):
     _fix_modscache(organizer)
-    
     mod_settings = {}
-    
-    Gustav_Dev = {
-       "GustavDev": {
-            "Folder": {"value": "GustavDev", "type": "LSString"},
-            "MD5": {"value": "", "type": "LSString"},
-            "Name": {"value": "GustavDev", "type": "LSString"},
-            "PublishHandle": {"value": "0", "type": "uint64"},
-            "UUID": {"value": "28ac9ce2-2aba-8cda-b3b5-6e922f71b6b8", "type": "guid"},
-            "Version64": {"value": "145100779997082619", "type": "int64"},
-        }
-    }
-    
-    mod_settings["GustavDev"] = Gustav_Dev
+
+    game_data_path = Path(organizer.managedGame().dataDirectory().absolutePath())
+    gustav_pak = game_data_path / "GustavX.pak"
+    if gustav_pak.exists():
+        gustav_metadata = _get_metadata_from_pak(gustav_pak)
+        if gustav_metadata:
+            folder_name = gustav_metadata.get("Folder", {}).get("value", "GustavX")
+            mod_settings["__GustavBase__"] = {folder_name: gustav_metadata}
 
     max_workers = min(multiprocessing.cpu_count(), 16)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -49,27 +63,23 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                     )
         
         for future in as_completed(futures):
-            
-            meta_data = future.result()
-            if meta_data:
-                try:
-                    print(f"Successfully processed mod metadata")
-                    if meta_data["metadata"] and not meta_data["metadata"].get("Override") or meta_data["metadata"] and meta_data["metadata"].get("Override") and meta_data["metadata"].get("LoadOrder"):
-                        if meta_data["modName"] not in mod_settings and (int(modlist.state(meta_data["modName"]) / 2) % 2 != 0):
-                            mod_settings[meta_data["modName"]] = {}
-                        mod_settings[meta_data["modName"]][meta_data["file"]] = meta_data["metadata"]
-                        
-                except Exception as e:
-                    print(f"Error processing file: {str(e)}")
+            try:
+                meta = future.result()
+                if meta and meta["metadata"]:
+                    m = meta["metadata"]
+                    if not m.get("Override") or m.get("LoadOrder"):
+                        if (int(modlist.state(meta["modName"]) / 2) % 2 != 0):
+                            mod_settings.setdefault(meta["modName"], {})[meta["file"]] = meta["metadata"]
+            except Exception as e:
+                print(f"Error processing file: {e}")
                 
-    mod_settings_file = Path(organizer.profile().absolutePath()) / "modsettings.lsx"
-    
+    profile_path = Path(organizer.profile().absolutePath())
     root = ET.Element("save")
     version = ET.SubElement(root, "version")
     version.set("major", "4")
-    version.set("minor", "7")
-    version.set("revision", "1")
-    version.set("build", "300")
+    version.set("minor", "8")
+    version.set("revision", "0")
+    version.set("build", "500")
     
     region = ET.SubElement(root, "region")
     region.set("id", "ModuleSettings")
@@ -88,118 +98,99 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     
     mods_children = ET.SubElement(mods_node, "children")
     
-    gustav_data = mod_settings.get("GustavDev", {}).get("GustavDev", {})
+    gustav_base = mod_settings.get("__GustavBase__", {})
+    gustav_data = next(iter(gustav_base.values()), None) if gustav_base else None
     if gustav_data:
-        gustav_node = ET.SubElement(mods_children, "node")
-        gustav_node.set("id", "ModuleShortDesc")
-        for attr_id, attr_data in gustav_data.items():
-            attribute = ET.SubElement(gustav_node, "attribute")
-            attribute.set("id", attr_id)
-            attribute.set("type", attr_data["type"])
-            attribute.set("value", str(attr_data["value"]))
+        gustav_node = ET.SubElement(mods_children, "node", id="ModuleShortDesc")
+        _add_module_attributes(gustav_node, gustav_data)
+    mod_settings.pop("__GustavBase__", None)
 
-    if "GustavDev" in mod_settings:
-        del mod_settings["GustavDev"]
-    
-    for modName in modlist.allModsByProfilePriority():
-        if modlist.state(modName) and (int(modlist.state(modName) / 2) % 2 != 0):
-            mod_data = mod_settings.get(modName, {})
-            for file_name, metadata in sorted(mod_data.items(), key=lambda x: x[0]):
-                mod_order_node = ET.SubElement(mods_order_node, "children")
-                mod_order_node.set("id", "Module")
-                attribute = ET.SubElement(mod_order_node, "attribute")
-                attribute.set("id", "UUID")       
-                attribute.set("value", metadata.get("UUID", {}).get("value", ""))
-                attribute.set("type", metadata.get("UUID", {}).get("type", ""))
-    
-                mod_node = ET.SubElement(mods_children, "node")
-                mod_node.set("id", "ModuleShortDesc")
-                for attr_id, attr_data in metadata.items():
-                    if attr_id == "Override" or attr_id == "LoadOrder":
-                        continue
-                    attribute = ET.SubElement(mod_node, "attribute")
-                    attribute.set("id", attr_id)
-                    attribute.set("type", attr_data["type"])
-                    attribute.set("value", str(attr_data["value"]))
-    
-    xml_str = ET.tostring(root, encoding='unicode')
-    # xml_str = ET.tostring(root, encoding='utf-8').decode('utf-8')
-    dom = minidom.parseString(xml_str)
-    formatted_xml = dom.toprettyxml(indent="  ", encoding='UTF-8')
-    
-    with open(mod_settings_file, 'wb') as f:
-        f.write(formatted_xml)
+    for mod_name in modlist.allModsByProfilePriority():
+        if modlist.state(mod_name) and (int(modlist.state(mod_name) / 2) % 2 != 0):
+            for file_name, metadata in sorted(mod_settings.get(mod_name, {}).items(), key=lambda x: x[0]):
+                order_node = ET.SubElement(mods_order_node, "children", id="Module")
+                u = metadata.get("UUID", {})
+                attr = ET.SubElement(order_node, "attribute")
+                attr.set("id", "UUID")
+                attr.set("value", u.get("value", ""))
+                attr.set("type", u.get("type", ""))
+                mod_node = ET.SubElement(mods_children, "node", id="ModuleShortDesc")
+                _add_module_attributes(mod_node, metadata)
+
+    (profile_path / "modsettings.lsx").write_bytes(
+        minidom.parseString(ET.tostring(root, encoding="unicode")).toprettyxml(indent="  ", encoding="UTF-8")
+    )
     
     return True
 
-def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profile: mobase.IProfile, mod: str):
-    cache_json_path = Path(profile.absolutePath()) / "modsCache.json"
-    modName = mod.name()
-    
-    if cache_json_path:
-        with open(cache_json_path, "r", encoding="utf-8") as f:
-            mods_cache = json.load(f)
-            
-            mod_data = mods_cache.get(modName)
-            if not mod_data:
-                print("Generating metadata for mod")
-                
-                max_workers = min(multiprocessing.cpu_count(), 16)
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = []
-                    mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
-                    mod_files = list(mod_path.glob("*.pak"))
-                    for file in mod_files:
-                        futures.append(
-                            executor.submit(_get_metadata, modName, file, profile.absolutePath())
-                        )
-                        
-                for future in as_completed(futures):
-                    try:
-                        meta_data = future.result()
-                        if meta_data:
-                            print(f"Successfully processed mod metadata")
-                            if modName not in mods_cache:
-                                mods_cache[modName] = {"Files": {}}
-                            mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
-                            
-                    except Exception as e:
-                        print(f"Error processing file: {str(e)}")
-            else:
-                mod_path = Path(modlist.getMod(modName).absolutePath()) / "PAK_FILES"
-                mod_files = list(mod_path.glob("*.pak"))
-                existing_files = mod_data.get("Files", {})
-                
-                max_workers = min(multiprocessing.cpu_count(), 16)
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = []
-                    for file in mod_files:
-                        if file.name not in existing_files:
-                            futures.append(
-                                executor.submit(_get_metadata, modName, file, profile.absolutePath())
-                            )
-                            
-                for future in as_completed(futures):
-                    try:
-                        meta_data = future.result()
-                        if meta_data:
-                            print(f"Successfully processed new mod metadata")
-                            mods_cache[modName]["Files"][meta_data["file"]] = meta_data["metadata"]
-                            
-                    except Exception as e:
-                        print(f"Error processing file: {str(e)}")
-                
-            print(mods_cache.get(modName))
-            return True      
-    else:
+def mod_installed(organizer: mobase.IOrganizer, modlist: mobase.IModList, profile: mobase.IProfile, mod):
+    cache_path = Path(profile.absolutePath()) / "modsCache.json"
+    if not cache_path.exists():
         return False
+    mod_name = mod.name()
+    profile_path = profile.absolutePath()
+
+    try:
+        mods_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        mods_cache = {}
+
+    mod_data = mods_cache.get(mod_name)
+    mod_path = Path(modlist.getMod(mod_name).absolutePath()) / "PAK_FILES"
+    mod_files = list(mod_path.glob("*.pak"))
+    max_workers = max(multiprocessing.cpu_count() - 1, 1)
+
+    if not mod_data:
+        mods_cache[mod_name] = {"Files": {}}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_get_metadata, mod_name, f, profile_path) for f in mod_files]
+            for future in as_completed(futures):
+                try:
+                    meta = future.result()
+                    if meta:
+                        mods_cache[mod_name]["Files"][meta["file"]] = meta["metadata"]
+                except Exception as e:
+                    print(f"Error processing file: {e}")
+    else:
+        existing = mod_data.get("Files", {})
+        to_refresh = []
+        for f in mod_files:
+            cached = existing.get(f.name)
+            if not (cached and cached.get("MD5", {}).get("value") == get_md5(f)):
+                to_refresh.append(f)
+        if to_refresh:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_get_metadata, mod_name, f, profile_path, True) for f in to_refresh]
+                for future in as_completed(futures):
+                    try:
+                        meta = future.result()
+                        if meta:
+                            mods_cache[mod_name]["Files"][meta["file"]] = meta["metadata"]
+                    except Exception as e:
+                        print(f"Error processing file: {e}")
+
+    cache_path.write_text(json.dumps(mods_cache, indent=4, ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def mod_removed(organizer: mobase.IOrganizer, profile: mobase.IProfile, mod):
+    cache_path = Path(profile.absolutePath()) / "modsCache.json"
+    if not cache_path.exists():
+        return True
+    mod_name = mod.name() if hasattr(mod, "name") else str(mod)
+    try:
+        mods_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        if mod_name in mods_cache:
+            del mods_cache[mod_name]
+            cache_path.write_text(json.dumps(mods_cache, indent=4, ensure_ascii=False), encoding="utf-8")
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return True
+
 
 def _extract_pak(file):
-
-    temp_dir = Path(__file__).resolve().parent / 'temp_extracted'
+    temp_dir = Path(__file__).resolve().parent / "temp_extracted"
     temp_dir.mkdir(parents=True, exist_ok=True)
-
-    import hashlib
     file_hash = hashlib.md5(str(file).encode()).hexdigest()[:10]
     output_dir = temp_dir / file_hash
 
@@ -217,199 +208,158 @@ def _extract_pak(file):
         "-l", "off"
     ]
 
-    result = subprocess.run(
-        command,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        check=True
-    )
-    
-    if result.returncode != 0:
-        return None
-    
+    subprocess.run(command, creationflags=_CREATE_NO_WINDOW, check=True)
     return output_dir
+
+def check_hash(pak_path, module_info_node):
+    hash_element = module_info_node.find(".//attribute[@id='MD5']")
+    return hash_element is not None and hash_element.attrib.get("value") == get_md5(pak_path)
+
+def get_md5(pak_path):
+    hasher = hashlib.md5()
+    with open(pak_path, 'rb') as f:
+        while chunk := f.read(8192):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 def check_override_pak(pak_path, module_info_node):
     cache_key = str(pak_path)
-    
-    if hasattr(check_override_pak, 'cache') and cache_key in check_override_pak.cache:
-        return check_override_pak.cache[cache_key]
-    
-    if not hasattr(check_override_pak, 'cache'):
-        check_override_pak.cache = {}
-    
-    command = [
-        str(divine_file),
-        "-a", "list-package",
-        "-g", "bg3",
-        "-s", str(pak_path),
-    ]
-    
+    cache = getattr(check_override_pak, "cache", None)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
     try:
         result = subprocess.run(
-            command,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            [str(divine_file), "-a", "list-package", "-g", "bg3", "-s", str(pak_path)],
+            creationflags=_CREATE_NO_WINDOW,
+            capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        
-        if result.returncode != 0:
-            return False
-            
-        list_package_output = result.stdout
-        
-        ignored_paths = [
-            'Game/GUI/Assets',
-            'ScriptExtender'
-        ]
-        
-        builtin_folders = [
-            'Public/'
-            'Public/Shared/',
-            'Public/SharedDev/',
-            'Public/Gustav/',
-            'Public/GustavX/',
-            'Public/GustavDev/',
-            'Public/MainUI/',
-            'Public/CrossplayUI'
-            'Public/PhotoMode'
-            'Public/ModBrowser/',
-            'Public/DiceSet_01/',
-            'Public/DiceSet_02/',
-            'Public/DiceSet_03/',
-            'Public/DiceSet_04/',
-            'Public/DiceSet_06/',
-            'Public/Honour/',
-            'Public/HonourX/',
-            'Public/Engine/',
-            'Public/Game/',
-            'Public/FW3/'
-        ]
-        
-        override = {
-            "Override": False,
-            "LoadOrder": False
-        }
-        
+        list_output = result.stdout
+        override = {"Override": False, "LoadOrder": False}
+        public_folder_path = ""
+
         if module_info_node is not None:
             folder_element = module_info_node.find(".//attribute[@id='Folder']")
             if folder_element is not None:
-                folder_name = folder_element.attrib['value']
+                folder_name = folder_element.attrib["value"]
                 mods_folder_path = f"Mods/{folder_name}"
-                
                 public_folder_path = f"Public/{folder_name}"
-                
-                if public_folder_path in list_package_output:
+                if public_folder_path in list_output:
                     override["LoadOrder"] = True
-                
-                files_in_folder = [
-                    line.strip() 
-                    for line in list_package_output.splitlines()
-                    if mods_folder_path in line
-                ]
-                
-                if files_in_folder and len(files_in_folder) > 1:
+                files_in_folder = [l.strip() for l in list_output.splitlines() if mods_folder_path in l]
+                if len(files_in_folder) > 1:
                     override["LoadOrder"] = True
-                 
-        for line in list_package_output.splitlines():
-            if any(ignored in line for ignored in ignored_paths):
+
+        for line in list_output.splitlines():
+            if any(ignored in line for ignored in _IGNORED_PATHS):
                 continue
-            if any(folder in line for folder in builtin_folders):
-                 override["Override"] = True     
-                 if public_folder_path in list_package_output:
+            if any(folder in line for folder in _BUILTIN_FOLDERS):
+                override["Override"] = True
+                if public_folder_path and public_folder_path in list_output:
                     override["LoadOrder"] = True
-                 
-                 return override
-                    
-        override["Override"] = False
-        
+                return override
+
+        if not getattr(check_override_pak, "cache", None):
+            check_override_pak.cache = {}
         check_override_pak.cache[cache_key] = override
         return override
-        
     except Exception as e:
-        print(f"Error checking override status: {str(e)}")
+        print(f"Error checking override status: {e}")
         return False
 
-def _get_metadata(modName, file, profile_path):
-    _default_attributes = ["Folder", "MD5", "Name", "PublishHandle", "UUID", "Version64", "Version"]
-    cache_json_path = os.path.join(profile_path, "modsCache.json")
+def _metadata_result(mod_name, file_name, metadata):
+    return {"modName": mod_name, "file": file_name, "metadata": metadata}
 
-    with cache_lock:
-        if os.path.exists(cache_json_path):
-            with open(cache_json_path, "r", encoding="utf-8") as f:
-                mods_cache = json.load(f)
-                if modName in mods_cache and file.name in mods_cache[modName].get("Files", {}):
-                    cached_data = mods_cache[modName]["Files"][file.name]
-                    return {"modName": modName, "file": file.name, "metadata": cached_data}
-        else:
-            mods_cache = {}
-            if not mods_cache.get(modName):
-                mods_cache[modName] = {"Files": {}}
-    
-    file_str = file.name
+
+def _get_metadata_from_pak(pak_path: Path) -> dict | None:
     extracted_pak = None
-    
     try:
-        meta_data = {}
-        extracted_pak = _extract_pak(file)
-        if extracted_pak:
-            meta_files = list(extracted_pak.glob("**/meta.lsx"))
-            
-            if not meta_files:
-                print(f"No meta.lsx files found in extracted PAK: {file.name}")
-                return {"modName": modName, "file": file.name, "metadata": {}}
-            
-            meta_file = str(meta_files[0])
-            print(f"Found meta.lsx at: {meta_file}")
-            
+        extracted_pak = _extract_pak(pak_path)
+        if not extracted_pak:
+            return None
+        meta_files = list(extracted_pak.glob("**/meta.lsx"))
+        if not meta_files:
+            return None
+        tree = ET.parse(str(meta_files[0]))
+        module_info_node = tree.getroot().find(".//node[@id='ModuleInfo']")
+        if module_info_node is None:
+            return None
+        override_result = check_override_pak(pak_path, module_info_node)
+        meta_data = dict(override_result) if isinstance(override_result, dict) else {}
+        for attr in _DEFAULT_ATTRIBUTES:
+            el = module_info_node.find(f"./attribute[@id='{attr}']")
+            if el is not None:
+                meta_data[attr] = {"value": el.attrib.get("value"), "type": el.attrib.get("type", "LSString")}
+                if attr == "MD5":
+                    meta_data[attr]["value"] = get_md5(pak_path)
+        return meta_data
+    except Exception as e:
+        print(f"Error extracting metadata from {pak_path.name}: {e}")
+        return None
+    finally:
+        if extracted_pak and extracted_pak.exists():
             try:
-                tree = ET.parse(meta_file)
-                root = tree.getroot()
-                module_info_node = root.find(".//node[@id='ModuleInfo']")
-                
-                if module_info_node is None:
-                    print(f"No ModuleInfo node found in {meta_file}")
-                    return {"modName": modName, "file": file.name, "metadata": {}}
-                
-                meta_data.update(check_override_pak(file, module_info_node))
+                shutil.rmtree(extracted_pak)
+            except Exception:
+                pass
 
-                for attribute in _default_attributes:
-                    element = module_info_node.find(f"./attribute[@id='{attribute}']")
-                    if element is not None:
-                        meta_data[attribute] = {
-                            'value': element.attrib['value'],
-                            'type': element.attrib.get('type')
-                        }
-            except ET.ParseError as e:
-                print(f"Error parsing XML in {meta_file}: {str(e)}")
-                return {"modName": modName, "file": file.name, "metadata": {}}
+
+def _get_metadata(mod_name, file, profile_path, refresh_cache=False):
+    cache_path = Path(profile_path) / "modsCache.json"
+    with cache_lock:
+        if cache_path.exists() and not refresh_cache:
+            try:
+                mods_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+            else:
+                files = mods_cache.get(mod_name, {}).get("Files", {})
+                if file.name in files:
+                    return _metadata_result(mod_name, file.name, files[file.name])
+
+    extracted_pak = None
+    try:
+        extracted_pak = _extract_pak(file)
+        if not extracted_pak:
+            return _metadata_result(mod_name, file.name, {})
+        meta_files = list(extracted_pak.glob("**/meta.lsx"))
+        if not meta_files:
+            print(f"No meta.lsx files found in extracted PAK: {file.name}")
+            return _metadata_result(mod_name, file.name, {})
+
+        tree = ET.parse(str(meta_files[0]))
+        module_info_node = tree.getroot().find(".//node[@id='ModuleInfo']")
+        if module_info_node is None:
+            return _metadata_result(mod_name, file.name, {})
+
+        override_result = check_override_pak(file, module_info_node)
+        meta_data = dict(override_result) if isinstance(override_result, dict) else {}
+        for attr in _DEFAULT_ATTRIBUTES:
+            el = module_info_node.find(f"./attribute[@id='{attr}']")
+            if el is not None:
+                meta_data[attr] = {"value": el.attrib.get("value"), "type": el.attrib.get("type", "LSString")}
+                if attr == "MD5":
+                    meta_data[attr]["value"] = get_md5(file)
 
         with cache_lock:
             try:
-                with open(cache_json_path, "r", encoding="utf-8") as f:
-                    mods_cache = json.load(f)
+                mods_cache = json.loads(cache_path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError):
                 mods_cache = {}
-            
-            if not mods_cache.get(modName):
-                mods_cache[modName] = {"Files": {}}
-            
-            mods_cache[modName]["Files"][file_str] = meta_data
-            
-            with open(cache_json_path, "w", encoding="utf-8") as f:
-                json.dump(mods_cache, f, indent=4, ensure_ascii=False)
-
-        return {"modName": modName, "file": file.name, "metadata": meta_data}
+            mods_cache.setdefault(mod_name, {"Files": {}})["Files"][file.name] = meta_data
+            cache_path.write_text(json.dumps(mods_cache, indent=4, ensure_ascii=False), encoding="utf-8")
+        return _metadata_result(mod_name, file.name, meta_data)
     except Exception as e:
-        print(f"Error in _get_metadata for {file.name}: {str(e)}")
-        return {"modName": modName, "file": file.name, "metadata": {}}
+        print(f"Error in _get_metadata for {file.name}: {e}")
+        return _metadata_result(mod_name, file.name, {})
     finally:
-        if extracted_pak and os.path.exists(extracted_pak):
+        if extracted_pak and extracted_pak.exists():
             try:
                 shutil.rmtree(extracted_pak)
             except Exception as e:
-                print(f"Error cleaning up temp directory {extracted_pak}: {str(e)}")
+                print(f"Error cleaning up {extracted_pak}: {e}")
 
 def _fix_modscache(organizer: mobase.IOrganizer):
     try:
@@ -419,9 +369,7 @@ def _fix_modscache(organizer: mobase.IOrganizer):
         if not cache_json_path.exists():
             print(f"{cache_json_path} does not exist. Exiting.")
             return True
-
-        with open(cache_json_path, "r", encoding="utf-8") as f:
-            mods_cache = json.load(f)
+        mods_cache = json.loads(cache_json_path.read_text(encoding="utf-8"))
 
         modlist = organizer.modList()
         installed_mods = {mod: True for mod in modlist.allMods()}
@@ -437,13 +385,21 @@ def _fix_modscache(organizer: mobase.IOrganizer):
                 print(f"Mod path {mod_path} does not exist. Skipping {mod_name}.")
                 continue
 
-            current_files = set(file.name for file in mod_path.glob("*.pak"))
-            cached_files = set(mod_data.get("Files", {}).keys())
+            current_files = {f.name: f for f in mod_path.glob("*.pak")}
+            cached_files = mod_data.get("Files", {})
 
-            missing_files = cached_files - current_files
+            missing_files = set(cached_files.keys()) - set(current_files.keys())
             for missing_file in missing_files:
                 print(f"Removing missing file {missing_file} from {mod_name}.")
                 del mod_data["Files"][missing_file]
+
+            for file_name, pak_path in current_files.items():
+                cached_file = cached_files.get(file_name)
+                if cached_file:
+                    cached_md5 = cached_file.get("MD5", {}).get("value")
+                    if cached_md5 and cached_md5 != get_md5(pak_path):
+                        print(f"PAK {file_name} changed (MD5 mismatch), invalidating cache for {mod_name}.")
+                        del mod_data["Files"][file_name]
 
             if not mod_data["Files"]:
                 mods_to_remove.append(mod_name)
@@ -451,9 +407,7 @@ def _fix_modscache(organizer: mobase.IOrganizer):
         for mod_name in mods_to_remove:
             print(f"Removing mod {mod_name} from mods cache.")
             del mods_cache[mod_name]
-
-        with open(cache_json_path, "w", encoding="utf-8") as f:
-            json.dump(mods_cache, f, indent=4, ensure_ascii=False)
+        cache_json_path.write_text(json.dumps(mods_cache, indent=4, ensure_ascii=False), encoding="utf-8")
 
         print("Successfully fixed mods cache.")
         return True
