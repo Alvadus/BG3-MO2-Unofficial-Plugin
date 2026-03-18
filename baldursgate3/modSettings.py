@@ -19,8 +19,14 @@ _BUILTIN_FOLDERS = (
     "Public/", "Public/Shared/", "Public/SharedDev/", "Public/Gustav/", "Public/GustavX/",
     "Public/GustavDev/", "Public/MainUI/", "Public/CrossplayUI/", "Public/PhotoMode/",
     "Public/ModBrowser/", "Public/DiceSet_01/", "Public/DiceSet_02/", "Public/DiceSet_03/",
-    "Public/DiceSet_04/", "Public/DiceSet_06/", "Public/Honour/", "Public/HonourX/",
-    "Public/Engine/", "Public/Game/", "Public/FW3/",
+    "Public/DiceSet_04/", "Public/DiceSet_05/", "Public/DiceSet_06/", "Public/DiceSet_07/", 
+    "Public/Honour/", "Public/HonourX/", "Public/Engine/", "Public/Game/", "Public/FW3/",
+
+    "Mods/Shared/", "Mods/SharedDev/", "Mods/Gustav/", "Mods/GustavX/",
+    "Mods/GustavDev/", "Mods/MainUI/", "Mods/CrossplayUI/", "Mods/PhotoMode/",
+    "Mods/ModBrowser/", "Mods/DiceSet_01/", "Mods/DiceSet_02/", "Mods/DiceSet_03/",
+    "Mods/DiceSet_04/", "Mods/DiceSet_05/", "Mods/DiceSet_06/", "Mods/DiceSet_07/",
+    "Mods/Honour/", "Mods/HonourX/", "Mods/Engine/", "Mods/Game/", "Mods/FW3/", 
 )
 
 try:
