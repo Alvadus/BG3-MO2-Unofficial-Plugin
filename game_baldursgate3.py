@@ -1,4 +1,7 @@
 from abc import ABC
+import configparser
+from enum import IntEnum, auto
+from functools import cached_property
 import os
 import json
 from pathlib import Path
@@ -25,6 +28,130 @@ from ..basic_features.utils import is_directory
 from ..basic_game import BasicGame
 
 from .baldursgate3 import modSettings
+
+_ICON_DIR = Path(__file__).resolve().parent / "baldursgate3" / "icons"
+
+
+def _bg3_icon(name):
+    return str(_ICON_DIR / name)
+
+class BG3Content(IntEnum):
+    SCRIPT_EXTENDER_MOD = auto()
+    OSIRIS_SCRIPT = auto()
+    OVERRIDE = auto()
+    OVERRIDE_LOAD_ORDER = auto()
+    NATIVE_DLL = auto()
+    LOOSE_FILES = auto()
+
+class BG3DataContent(mobase.ModDataContent):
+    _contents = [
+        (BG3Content.SCRIPT_EXTENDER_MOD, "Script Extender Mod", _bg3_icon("script_extender.svg")),
+        (BG3Content.OSIRIS_SCRIPT, "Osiris Script", _bg3_icon("osiris.svg")),
+        (BG3Content.OVERRIDE, "Override Mod", _bg3_icon("override.svg")),
+        (BG3Content.OVERRIDE_LOAD_ORDER, "Override + Load Order Mod", _bg3_icon("override_load_order.svg")),
+        (BG3Content.NATIVE_DLL, "Native DLL Mod", _bg3_icon("native_dll.svg")),
+        (BG3Content.LOOSE_FILES, "Loose File Override", _bg3_icon("loose_files.svg")),
+    ]
+
+    def __init__(self, organizer: mobase.IOrganizer):
+        super().__init__()
+        self._organizer = organizer
+
+    def getAllContents(self) -> list[mobase.ModDataContent.Content]:
+        return [
+            mobase.ModDataContent.Content(content_id, name, icon)
+            for content_id, name, icon in self._contents
+        ]
+
+    def getContentsFor(self, filetree: mobase.IFileTree) -> list[int]:
+        contents: set[int] = set()
+        self._scan_contents(filetree, contents)
+        self._scan_cached_pak_metadata(filetree, contents)
+        return list(contents)
+
+    def _scan_cached_pak_metadata(self, filetree: mobase.IFileTree, contents: set[int]):
+        mod_root = self._mod_root_from_tree(filetree)
+        if not mod_root:
+            return
+
+        meta_ini = mod_root / "meta.ini"
+        if not meta_ini.exists():
+            return
+
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str
+        config.read(meta_ini, encoding="utf-8")
+
+        for section in config.sections():
+            if not section.casefold().endswith(".pak"):
+                continue
+            if config[section].getboolean("HasOsiris", fallback=False):
+                contents.add(BG3Content.OSIRIS_SCRIPT)
+            if config[section].getboolean("HasScriptExtender", fallback=False):
+                contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
+            is_override = config[section].getboolean("Override", fallback=False)
+            has_load_order = config[section].getboolean("LoadOrder", fallback=False)
+            if is_override and has_load_order:
+                contents.add(BG3Content.OVERRIDE_LOAD_ORDER)
+            elif is_override:
+                contents.add(BG3Content.OVERRIDE)
+
+    def _mod_root_from_tree(self, filetree: mobase.IFileTree) -> Path | None:
+        if not hasattr(filetree, "name"):
+            return None
+
+        mod_name = filetree.name()
+        if not mod_name:
+            return None
+
+        modlist = self._organizer.modList()
+        try:
+            mod = modlist.getMod(mod_name)
+            if mod:
+                return Path(mod.absolutePath())
+        except Exception:
+            pass
+
+        for candidate in modlist.allMods():
+            try:
+                mod = modlist.getMod(candidate)
+                if mod and mod.name() == mod_name:
+                    return Path(mod.absolutePath())
+            except Exception:
+                continue
+        return None
+
+    def _scan_contents(self, filetree: mobase.IFileTree, contents: set[int], prefix=""):
+        for entry in filetree:
+            name = entry.name()
+            lower_name = name.casefold()
+            rel_path = f"{prefix}/{name}" if prefix else name
+            lower_path = rel_path.replace("\\", "/").casefold()
+            if isinstance(entry, mobase.IFileTree):
+                if lower_name in {"se_config", "script extender"}:
+                    contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
+                elif lower_name == "scriptextender" or lower_path.endswith("/scriptextender"):
+                    contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
+                elif "/story/rawfiles/goals" in lower_path:
+                    contents.add(BG3Content.OSIRIS_SCRIPT)
+                elif name in {"Root", "bin"}:
+                    contents.add(BG3Content.NATIVE_DLL)
+                elif name in {"Generated", "Public", "Localization", "Data"}:
+                    contents.add(BG3Content.LOOSE_FILES)
+                self._scan_contents(entry, contents, rel_path)
+            elif lower_name.endswith(".dll"):
+                contents.add(BG3Content.NATIVE_DLL)
+            elif lower_name.endswith(".json"):
+                if (
+                    "/script extender/" in lower_path
+                    or "/scriptextender/" in lower_path
+                    or lower_name == "scriptextendersettings.json"
+                ):
+                    contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
+            elif lower_name.endswith((".osi", ".txt")) and "/story/rawfiles/goals/" in lower_path:
+                contents.add(BG3Content.OSIRIS_SCRIPT)
+            elif lower_name.endswith(".lua") or lower_name in {"bootstrapserver.lua", "bootstrapclient.lua"}:
+                contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
 
 class BG3ModDataChecker(BasicModDataChecker):
     def __init__(self):
@@ -53,7 +180,6 @@ class BG3ModDataChecker(BasicModDataChecker):
                     "*.json": "SE_CONFIG/",
                     "BG3MCM": "SE_CONFIG/",
                     # DLL Mods
-                    "bin": "Root/bin",
                     "*.dll": "Root/bin/",
                 }
             )
@@ -87,7 +213,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "1.0.1"
+    Version = "1.1.0"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -116,23 +242,22 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         "LevelCache": {
             "pattern": "*",
             "pathName": "LevelCache"
+        },
+        "Root": {
+            "pattern": "*",
+            "pathName": "",
+            "absolute": True,
         }
     }
 
     def __init__(self):
         BasicGame.__init__(self)
         mobase.IPluginFileMapper.__init__(self)
-        
-    def create_modscache(self, profile_path):
-        profile_path = Path(profile_path)
-        mod_cache_path = profile_path / "modsCache.json"
-        if not mod_cache_path.exists():
-            with open(mod_cache_path, "w") as f:
-                json.dump({}, f)
 
     def init(self, organizer: mobase.IOrganizer) -> bool:
         super().init(organizer)
         self._register_feature(BG3ModDataChecker())
+        self._register_feature(BG3DataContent(organizer))
         self._register_feature(BasicGameSaveGameInfo(
             lambda s: s.with_suffix(".webp")
         ))
@@ -161,7 +286,6 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onAboutToRun(self, executable: str):
-        self.create_modscache(self._organizer.profile().absolutePath())
         modSettings.generate_mod_settings(self._organizer, self._organizer.modList(), self._organizer.profile())
         return True
 
@@ -228,8 +352,6 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onUserInterfaceLoad(self, window):
-        self.create_modscache(self._organizer.profile().absolutePath())
-            
         hasDependencies = check_bg3_paths(self._organizer)
 
         if hasDependencies is False:
@@ -238,13 +360,62 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
 
     def onProfileCreated(self, profile: mobase.IProfile):
-        profile_path = Path(profile.absolutePath())
-        print(profile_path)
-        self.create_modscache(profile_path)
         return True
 
     def iniFiles(self):
         return ["modsettings.lsx"]
+
+    def executables(self) -> list[mobase.ExecutableInfo]:
+        return [
+            mobase.ExecutableInfo(
+                f"{self.gameName()}: DX11",
+                self.gameDirectory().absoluteFilePath(r"bin\bg3_dx11.exe"),
+            ),
+            mobase.ExecutableInfo(
+                f"{self.gameName()}: Vulkan",
+                self.gameDirectory().absoluteFilePath(self.binaryName()),
+            ),
+            mobase.ExecutableInfo(
+                "Larian Launcher",
+                self.gameDirectory().absoluteFilePath(self.getLauncherName()),
+            ),
+        ]
+
+    @cached_property
+    def _base_dlls(self) -> set[str]:
+        base_bin = Path(self.gameDirectory().absoluteFilePath("bin"))
+        return {str(f.relative_to(base_bin)).casefold() for f in base_bin.glob("*.dll")}
+
+    def executableForcedLoads(self) -> list[mobase.ExecutableForcedLoadSetting]:
+        try:
+            forced_loads = super().executableForcedLoads()
+        except AttributeError:
+            forced_loads = []
+
+        libs: set[str] = set()
+
+        tree = self._organizer.virtualFileTree().find("bin")
+        if isinstance(tree, mobase.IFileTree):
+            def find_dlls(_, entry: mobase.FileTreeEntry) -> mobase.IFileTree.WalkReturn:
+                relpath = entry.pathFrom(tree)
+                if relpath and entry.hasSuffix("dll") and relpath.casefold() not in self._base_dlls:
+                    libs.add(relpath)
+                return mobase.IFileTree.WalkReturn.CONTINUE
+
+            tree.walk(find_dlls)
+
+        for root_bin in self._active_root_bin_paths():
+            for dll in root_bin.rglob("*.dll"):
+                relpath = str(dll.relative_to(root_bin))
+                if relpath.casefold() not in self._base_dlls:
+                    libs.add(relpath)
+
+        qDebug(f"BG3 DLLs to force load: {libs}")
+        return forced_loads + [
+            mobase.ExecutableForcedLoadSetting(exe.binary().fileName(), lib).withEnabled(True)
+            for lib in libs
+            for exe in self.executables()
+        ]
 
     def mappings(self) -> list[mobase.Mapping]:
         map = []
@@ -263,6 +434,10 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         for mod_type, mod_map_data in self._mods_paths.items():
             mod_pattern = mod_map_data["pattern"]
             mod_destpath = mod_map_data["pathName"]
+            if mod_map_data.get("absolute"):
+                mod_destpath = self.gameDirectory().absoluteFilePath(mod_destpath)
+            else:
+                mod_destpath = appdata_path.absoluteFilePath(mod_destpath)
 
             # Handle mods from mod directory
             for modName in self._get_mods_from_type(mod_type):
@@ -272,7 +447,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                 for file in mod_files:
                     map.append(mobase.Mapping(
                         source=str(file),
-                        destination=os.path.join(appdata_path.absoluteFilePath(mod_destpath), str(file.name)),
+                        destination=os.path.join(mod_destpath, str(file.name)),
                         is_directory=file.is_dir(),
                         create_target=True,
                     ))
@@ -284,7 +459,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                 for file in overwrite_files:
                     map.append(mobase.Mapping(
                         source=str(file),
-                        destination=os.path.join(appdata_path.absoluteFilePath(mod_destpath), str(file.name)),
+                        destination=os.path.join(mod_destpath, str(file.name)),
                         is_directory=file.is_dir(),
                         create_target=True,
                     ))
@@ -299,38 +474,36 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return map
 
     def _get_mods_from_type(self, mod_type: str):
-        mods_path = Path(self._organizer.modsPath())
         all_mods = self._organizer.modList().allModsByProfilePriority()
 
         mods: list[str] = []
         for modName in all_mods:
             if self._organizer.modList().state(modName) & mobase.ModState.ACTIVE != 0:
-                if mods_path.joinpath(modName, mod_type).exists():
+                mod = self._organizer.modList().getMod(modName)
+                if Path(mod.absolutePath(), mod_type).exists():
                     mods.append(modName)
         return mods
+
+    def _active_root_bin_paths(self) -> list[Path]:
+        modlist = self._organizer.modList()
+        paths = []
+        for modName in modlist.allModsByProfilePriority():
+            if modlist.state(modName) & mobase.ModState.ACTIVE == 0:
+                continue
+            root_bin = Path(modlist.getMod(modName).absolutePath()) / "Root" / "bin"
+            if root_bin.exists():
+                paths.append(root_bin)
+
+        overwrite_root_bin = Path(self._organizer.overwritePath()) / "Root" / "bin"
+        if overwrite_root_bin.exists():
+            paths.append(overwrite_root_bin)
+        return paths
 
 def check_bg3_paths(organizer):
     base_dir = Path(__file__).parent / "baldursgate3"
     temp_dir = base_dir / "temp_extracted"
     tools_dir = base_dir / "tools"
     divine_exe = tools_dir / "Divine.exe"
-
-    required_files = {
-        "CommandLineArgumentsParser.dll",
-        "Divine.dll",
-        "Divine.dll.config",
-        "Divine.exe",
-        "Divine.runtimeconfig.json",
-        "granny2.dll",
-        "LSLib.dll",
-        "LSLibNative.dll",
-        "LZ4.dll",
-        "LZ4pn.dll",
-        "Newtonsoft.Json.dll",
-        "OpenTK.Mathematics.dll",
-        "System.IO.Hashing.dll",
-        "ZstdSharp.dll",
-    }
 
     if tools_dir.exists() and divine_exe.exists():
         return True
@@ -354,8 +527,22 @@ def check_bg3_paths(organizer):
     progress.show()
 
     try:
-        zip_url = "https://github.com/Norbyte/lslib/releases/download/v1.19.5/ExportTool-v1.19.5.zip"
-        zip_filename = "ExportTool-v1.19.5.zip"
+        release_url = "https://api.github.com/repos/Norbyte/lslib/releases/latest"
+        with urllib.request.urlopen(release_url) as response:
+            release_data = json.loads(response.read().decode("utf-8"))
+        asset = next(
+            (
+                a for a in release_data.get("assets", [])
+                if a.get("name", "").lower().endswith(".zip")
+                and "exporttool" in a.get("name", "").lower()
+            ),
+            None,
+        )
+        if not asset:
+            raise RuntimeError("Could not find an ExportTool zip in the latest LSLib release.")
+
+        zip_url = asset["browser_download_url"]
+        zip_filename = asset["name"]
         zip_path = Path(tempfile.gettempdir()) / zip_filename
 
         def reporthook(block_num, block_size, total_size):
@@ -367,21 +554,17 @@ def check_bg3_paths(organizer):
 
         urllib.request.urlretrieve(zip_url, str(zip_path), reporthook)
 
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
-
-        tools_source = next(
-            (p for p in temp_dir.rglob("Tools") if p.is_dir()),
-            None
-        )
-        if not tools_source:
-            raise RuntimeError("Could not find 'Tools' folder in the archive.")
-
         tools_dir.mkdir(parents=True, exist_ok=True)
 
-        for file in tools_source.iterdir():
-            if file.name in required_files:
-                shutil.copy2(file, tools_dir / file.name)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            for archive_info in zip_ref.infolist():
+                if archive_info.is_dir():
+                    continue
+                file_name = Path(archive_info.filename).name
+                if not file_name:
+                    continue
+                extracted_path = Path(zip_ref.extract(archive_info, temp_dir))
+                shutil.copy2(extracted_path, tools_dir / file_name)
 
         progress.setValue(100)
 
