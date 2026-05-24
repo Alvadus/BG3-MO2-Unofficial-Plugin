@@ -343,6 +343,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
     
     def onModInstalled(self, mod: str):
+        qDebug("BUCK U")
         modSettings.mod_installed(self._organizer, self._organizer.modList(), self._organizer.profile(), mod)
         return True
 
