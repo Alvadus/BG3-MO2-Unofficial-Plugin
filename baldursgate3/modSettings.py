@@ -593,13 +593,15 @@ def check_override_pak(pak_path, module_info_node):
                 override["HasScriptExtender"] = True
 
         for path, _root_folder, mod_folder in _iter_pak_data_paths(list_output):
+            if folder_name and mod_folder == folder_name and not path.lower().endswith("/meta.lsx"):
+                override["LoadOrder"] = True
+                continue
+
             if any(ignored in path for ignored in _IGNORED_PATHS):
                 continue
 
             if mod_folder in _BUILTIN_MODULE_FOLDERS:
                 override["Override"] = True
-            elif folder_name and mod_folder == folder_name and not path.lower().endswith("/meta.lsx"):
-                override["LoadOrder"] = True
 
         if not getattr(check_override_pak, "cache", None):
             check_override_pak.cache = {}
