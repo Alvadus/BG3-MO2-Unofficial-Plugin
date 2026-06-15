@@ -6,7 +6,7 @@
 Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 modding.
 
 > [!NOTE]
-> Using this with [Root Builder](https://www.nexusmods.com/skyrimspecialedition/mods/31720) is recommended!
+> Using this with [Root Builder](https://www.nexusmods.com/skyrimspecialedition/mods/31720) is recommended for versions under 1.1.0!
 
 # Features
 - Automatic generation of Mods Load Order.
