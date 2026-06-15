@@ -23,9 +23,6 @@ Download the latest release of the plugin, extract all the files inside "\plugin
 # FAQ
 - **When I click run, my Mod Organizer 2 freezes for a bit**
 *That is normal, the plugin is generating a mods cache for all mods in your load order, the duration depends on the amount of mods you have, and it only happens once if the mods cache file was never generated.*
-- **What is mods cache?**
-*This plugin uses [LSLib](https://github.com/Norbyte/lslib) to extract metadata from .pak files, some specific data is needed in order to generate a load order, extracted mods are put in "\plugins\basic_games\games\baldursgate3\temp_extracted" before getting deleted, modsCache.json file is found inside your Mod Organizer 2 profile.*
-
 
 # Credits
 - Thanks to [Norbyte](https://github.com/Norbyte) for [LSLib](https://github.com/Norbyte/lslib), which allows this plugin to extract data from pak files in order to manage load order.
