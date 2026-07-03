@@ -293,6 +293,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
     mod_settings_file = profile_path / "modsettings.lsx"
     mod_settings = {}
     active_pak_count = 0
+    active_module_count = 0
 
     max_workers = min(multiprocessing.cpu_count(), 16)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -303,6 +304,12 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
 
             mod = modlist.getMod(modName)
             mod_root = Path(mod.absolutePath())
+            for module_root in _loose_module_roots(mod_root):
+                meta = _get_loose_module_metadata(modName, module_root)
+                if meta and meta["metadata"]:
+                    mod_settings.setdefault(modName, {})[meta["file"]] = meta["metadata"]
+                    active_module_count += 1
+
             mod_path = mod_root / "PAK_FILES"
             if not mod_path.exists():
                 continue
@@ -333,7 +340,7 @@ def generate_mod_settings(organizer: mobase.IOrganizer, modlist: mobase.IModList
                 print(f"Error processing file: {e}")
 
     fallback_modules = []
-    if active_pak_count and not mod_settings:
+    if (active_pak_count or active_module_count) and not mod_settings:
         fallback_modules = _read_existing_modsettings_modules(mod_settings_file)
         if not fallback_modules:
             print("Skipping modsettings.lsx write because no active pak metadata was available.")
@@ -614,6 +621,76 @@ def check_override_pak(pak_path, module_info_node):
 
 def _metadata_result(mod_name, file_name, metadata):
     return {"modName": mod_name, "file": file_name, "metadata": metadata}
+
+
+def _loose_module_roots(mod_root: Path):
+    candidates = [
+        mod_root / "Root" / "Data" / "Mods",
+        mod_root / "Data" / "Mods",
+    ]
+    seen = set()
+    for mods_root in candidates:
+        if not mods_root.exists():
+            continue
+        for module_root in mods_root.iterdir():
+            if not module_root.is_dir():
+                continue
+            key = module_root.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            if (module_root / "meta.lsx").exists():
+                yield module_root
+
+
+def _has_loose_osiris(module_root: Path):
+    for path in module_root.rglob("*"):
+        if path.is_file() and "/story/rawfiles/goals/" in path.as_posix().casefold():
+            return True
+    return False
+
+
+def _has_loose_script_extender(module_root: Path):
+    for path in module_root.rglob("*"):
+        normalized = path.as_posix()
+        if _has_script_extender_path(normalized):
+            return True
+    return False
+
+
+def _get_loose_module_metadata(mod_name, module_root: Path):
+    try:
+        meta_path = module_root / "meta.lsx"
+        tree = ET.parse(str(meta_path))
+        module_info_node = tree.getroot().find(".//node[@id='ModuleInfo']")
+        if module_info_node is None:
+            return _metadata_result(mod_name, module_root.name, {})
+
+        meta_data = {
+            "Override": False,
+            "LoadOrder": True,
+            "HasOsiris": _has_loose_osiris(module_root),
+            "HasScriptExtender": _has_loose_script_extender(module_root),
+        }
+        for attr in _DEFAULT_ATTRIBUTES:
+            el = module_info_node.find(f"./attribute[@id='{attr}']")
+            if el is not None:
+                meta_data[attr] = {"value": el.attrib.get("value"), "type": el.attrib.get("type", "LSString")}
+
+        if "Folder" not in meta_data:
+            meta_data["Folder"] = {"value": module_root.name, "type": "LSString"}
+        if "Name" not in meta_data:
+            meta_data["Name"] = {"value": module_root.name, "type": "FixedString"}
+        if "MD5" not in meta_data:
+            meta_data["MD5"] = {"value": "", "type": "LSString"}
+
+        uuid = meta_data.get("UUID", {}).get("value")
+        if not uuid:
+            return _metadata_result(mod_name, module_root.name, {})
+        return _metadata_result(mod_name, f"{module_root.name}/meta.lsx", meta_data)
+    except Exception as e:
+        print(f"Error reading loose module metadata from {module_root}: {e}")
+        return _metadata_result(mod_name, module_root.name, {})
 
 
 def _override_metadata_without_meta(pak_path):
