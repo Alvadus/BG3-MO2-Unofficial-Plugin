@@ -176,6 +176,7 @@ class BG3ModDataChecker(BasicModDataChecker):
                 move={
                     # PAK Mods
                     "*.pak": "PAK_FILES/",
+                    "bin": "Root/",
                     # Script Extender Config Mods
                     "*.json": "SE_CONFIG/",
                     "BG3MCM": "SE_CONFIG/",
@@ -187,6 +188,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 
     _extra_move_patterns = {
         "*.dll": "Root/bin/",
+        "bin": "Root/",
     }
 
     def dataLooksValid(
@@ -200,6 +202,8 @@ class BG3ModDataChecker(BasicModDataChecker):
 
         if any(filetree.exists(p) for p in self._extra_move_patterns):
             return mobase.ModDataChecker.FIXABLE
+        if self._contains_unsorted_pak(filetree) or self._contains_unsorted_bin(filetree):
+            return mobase.ModDataChecker.FIXABLE
         rp = self._regex_patterns
         for entry in filetree:
             name = entry.name().casefold()
@@ -210,10 +214,65 @@ class BG3ModDataChecker(BasicModDataChecker):
                     status = mobase.ModDataChecker.VALID
         return status
 
+    def fix(self, filetree: mobase.IFileTree) -> mobase.IFileTree:
+        filetree = super().fix(filetree)
+        self._move_unsorted_bins(filetree, filetree)
+        self._move_unsorted_paks(filetree, filetree)
+        self._remove_empty_dirs(filetree)
+        return filetree
+
+    def _contains_unsorted_pak(self, filetree: mobase.IFileTree, inside_pak_files=False):
+        current_inside_pak_files = inside_pak_files or filetree.name().casefold() == "pak_files"
+        for entry in filetree:
+            if isinstance(entry, mobase.IFileTree):
+                if self._contains_unsorted_pak(entry, current_inside_pak_files):
+                    return True
+            elif entry.name().casefold().endswith(".pak") and not current_inside_pak_files:
+                return True
+        return False
+
+    def _contains_unsorted_bin(self, filetree: mobase.IFileTree, inside_root=False):
+        current_inside_root = inside_root or filetree.name().casefold() == "root"
+        for entry in filetree:
+            if isinstance(entry, mobase.IFileTree):
+                name = entry.name().casefold()
+                if name == "bin" and not current_inside_root:
+                    return True
+                if self._contains_unsorted_bin(entry, current_inside_root):
+                    return True
+        return False
+
+    def _move_unsorted_paks(self, root: mobase.IFileTree, filetree: mobase.IFileTree, inside_pak_files=False):
+        current_inside_pak_files = inside_pak_files or filetree.name().casefold() == "pak_files"
+        for entry in list(filetree):
+            if isinstance(entry, mobase.IFileTree):
+                self._move_unsorted_paks(root, entry, current_inside_pak_files)
+            elif entry.name().casefold().endswith(".pak") and not current_inside_pak_files:
+                root.move(entry, "PAK_FILES/", mobase.IFileTree.InsertPolicy.MERGE)
+
+    def _move_unsorted_bins(self, root: mobase.IFileTree, filetree: mobase.IFileTree, inside_root=False):
+        current_inside_root = inside_root or filetree.name().casefold() == "root"
+        for entry in list(filetree):
+            if not isinstance(entry, mobase.IFileTree):
+                continue
+            name = entry.name().casefold()
+            if name == "bin" and not current_inside_root:
+                root.move(entry, "Root/", mobase.IFileTree.InsertPolicy.MERGE)
+            else:
+                self._move_unsorted_bins(root, entry, current_inside_root)
+
+    def _remove_empty_dirs(self, filetree: mobase.IFileTree):
+        for entry in list(filetree):
+            if not isinstance(entry, mobase.IFileTree):
+                continue
+            self._remove_empty_dirs(entry)
+            if len(entry) == 0:
+                entry.detach()
+
 class BG3Game(BasicGame, mobase.IPluginFileMapper):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "1.1.1"
+    Version = "1.1.2"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -343,7 +402,6 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         return True
     
     def onModInstalled(self, mod: str):
-        qDebug("BUCK U")
         modSettings.mod_installed(self._organizer, self._organizer.modList(), self._organizer.profile(), mod)
         return True
 
