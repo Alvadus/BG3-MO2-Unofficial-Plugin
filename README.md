@@ -13,9 +13,7 @@ Unofficial Mod Organizer 2 Plugin that offers support for Baldur's Gate 3 moddin
 - Support for mods that contain multiple .pak files.
 - Support for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.
 - Overwrite generation for [Norbyte's Baldur's Gate 3 Script Extender](https://github.com/Norbyte/bg3se) configuration mods.
-
-# Planned features in the future if possible:
-- Support for WIP Toolkit unpacked mods.
+- Support for unpacked mods.
 
 # How to install?
 Download the latest release of the plugin, extract all the files inside "\plugins\basic_games\games" in your Mod Organizer 2 directory, replace if you are updating.
