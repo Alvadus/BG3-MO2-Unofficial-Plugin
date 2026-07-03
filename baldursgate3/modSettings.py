@@ -29,7 +29,7 @@ except AttributeError:
     _CREATE_NO_WINDOW = 0
 
 
-def _add_module_attributes(parent, metadata, skip=frozenset({"Override", "LoadOrder"})):
+def _add_module_attributes(parent, metadata, skip=frozenset({"Override", "LoadOrder", "HasOsiris", "HasScriptExtender"})):
     for attr_id, attr_data in metadata.items():
         if attr_id not in skip:
             el = ET.SubElement(parent, "attribute")
