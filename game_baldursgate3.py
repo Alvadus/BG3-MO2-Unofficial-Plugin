@@ -1,21 +1,21 @@
-from abc import ABC
-import configparser
 from enum import IntEnum, auto
 from functools import cached_property
 import os
-import json
 from pathlib import Path
 import shutil
-import subprocess
-import zipfile
-import tempfile
-import urllib.request
-import re
 
 import mobase # type: ignore
-from PyQt6.QtCore import QDir, QFileInfo, QDirIterator, QFile, qDebug, QCoreApplication, Qt
-from PyQt6.QtWidgets import QMessageBox, QMainWindow, QApplication, QPushButton, QProgressDialog
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QDir, qDebug, Qt
+from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QDialog,
+    QDialogButtonBox,
+    QRadioButton,
+    QScrollArea,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..basic_features import (
     BasicGameSaveGameInfo,
@@ -24,16 +24,18 @@ from ..basic_features import (
     GlobPatterns,
 )
 # from ..basic_features.basic_save_game_info import BasicGameSaveGame
-from ..basic_features.utils import is_directory
 from ..basic_game import BasicGame
 
 from .baldursgate3 import modSettings
+from .baldursgate3.quick_options import BG3QuickOptions
+from .baldursgate3.lslib_setup import check_bg3_paths
 
 _ICON_DIR = Path(__file__).resolve().parent / "baldursgate3" / "icons"
 
 
 def _bg3_icon(name):
     return str(_ICON_DIR / name)
+
 
 class BG3Content(IntEnum):
     SCRIPT_EXTENDER_MOD = auto()
@@ -42,6 +44,7 @@ class BG3Content(IntEnum):
     OVERRIDE_LOAD_ORDER = auto()
     NATIVE_DLL = auto()
     LOOSE_FILES = auto()
+    LOOSE_MODULE = auto()
 
 class BG3DataContent(mobase.ModDataContent):
     _contents = [
@@ -51,6 +54,7 @@ class BG3DataContent(mobase.ModDataContent):
         (BG3Content.OVERRIDE_LOAD_ORDER, "Override + Load Order Mod", _bg3_icon("override_load_order.svg")),
         (BG3Content.NATIVE_DLL, "Native DLL Mod", _bg3_icon("native_dll.svg")),
         (BG3Content.LOOSE_FILES, "Loose File Override", _bg3_icon("loose_files.svg")),
+        (BG3Content.LOOSE_MODULE, "Loose Mod", _bg3_icon("loose_module.svg")),
     ]
 
     def __init__(self, organizer: mobase.IOrganizer):
@@ -65,8 +69,12 @@ class BG3DataContent(mobase.ModDataContent):
 
     def getContentsFor(self, filetree: mobase.IFileTree) -> list[int]:
         contents: set[int] = set()
-        self._scan_contents(filetree, contents)
-        self._scan_cached_pak_metadata(filetree, contents)
+        try:
+            self._scan_contents(filetree, contents)
+            self._scan_loose_data(filetree, contents)
+            self._scan_cached_pak_metadata(filetree, contents)
+        except Exception as e:
+            qDebug(f"BG3: content scan failed: {e}")
         return list(contents)
 
     def _scan_cached_pak_metadata(self, filetree: mobase.IFileTree, contents: set[int]):
@@ -78,9 +86,9 @@ class BG3DataContent(mobase.ModDataContent):
         if not meta_ini.exists():
             return
 
-        config = configparser.ConfigParser(interpolation=None)
-        config.optionxform = str
-        config.read(meta_ini, encoding="utf-8")
+        config = modSettings.read_meta_ini(meta_ini)
+        if config is None:
+            return
 
         for section in config.sections():
             if not section.casefold().endswith(".pak"):
@@ -134,10 +142,8 @@ class BG3DataContent(mobase.ModDataContent):
                     contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
                 elif "/story/rawfiles/goals" in lower_path:
                     contents.add(BG3Content.OSIRIS_SCRIPT)
-                elif name in {"Root", "bin"}:
+                elif lower_name == "bin":
                     contents.add(BG3Content.NATIVE_DLL)
-                elif name in {"Generated", "Public", "Localization", "Data"}:
-                    contents.add(BG3Content.LOOSE_FILES)
                 self._scan_contents(entry, contents, rel_path)
             elif lower_name.endswith(".dll"):
                 contents.add(BG3Content.NATIVE_DLL)
@@ -152,6 +158,141 @@ class BG3DataContent(mobase.ModDataContent):
                 contents.add(BG3Content.OSIRIS_SCRIPT)
             elif lower_name.endswith(".lua") or lower_name in {"bootstrapserver.lua", "bootstrapclient.lua"}:
                 contents.add(BG3Content.SCRIPT_EXTENDER_MOD)
+
+    def _scan_loose_data(self, filetree: mobase.IFileTree, contents: set[int]):
+        for data_root in self._loose_data_roots(filetree):
+            owned = self._loose_module_folders(data_root)
+            if owned:
+                contents.add(BG3Content.LOOSE_MODULE)
+            for entry in data_root:
+                if not isinstance(entry, mobase.IFileTree):
+                    continue
+                name = entry.name().casefold()
+                if name == "localization":
+                    contents.add(BG3Content.LOOSE_FILES)
+                elif name in ("mods", "public") and self._touches_other_folders(entry, owned):
+                    contents.add(BG3Content.LOOSE_FILES)
+                elif name == "generated" and self._generated_touches_other_folders(entry, owned):
+                    contents.add(BG3Content.LOOSE_FILES)
+
+    def _loose_data_roots(self, filetree: mobase.IFileTree):
+        yield filetree
+        root = self._child_dir(filetree, "root")
+        data = self._child_dir(root, "data") if root is not None else None
+        if data is not None:
+            yield data
+
+    def _child_dir(self, filetree: mobase.IFileTree, name: str):
+        for entry in filetree:
+            if isinstance(entry, mobase.IFileTree) and entry.name().casefold() == name:
+                return entry
+        return None
+
+    def _loose_module_folders(self, data_root: mobase.IFileTree) -> set[str]:
+        mods = self._child_dir(data_root, "mods")
+        if mods is None:
+            return set()
+        return {
+            entry.name().casefold()
+            for entry in mods
+            if isinstance(entry, mobase.IFileTree)
+            and not modSettings.is_builtin_module_folder(entry.name())
+            and any(
+                not isinstance(child, mobase.IFileTree) and child.name().casefold() == "meta.lsx"
+                for child in entry
+            )
+        }
+
+    def _touches_other_folders(self, folder: mobase.IFileTree, owned: set[str]) -> bool:
+        return any(
+            not isinstance(entry, mobase.IFileTree) or entry.name().casefold() not in owned
+            for entry in folder
+        )
+
+    def _generated_touches_other_folders(self, generated: mobase.IFileTree, owned: set[str]) -> bool:
+        for entry in generated:
+            if not isinstance(entry, mobase.IFileTree) or entry.name().casefold() != "public":
+                return True
+            if self._touches_other_folders(entry, owned):
+                return True
+        return False
+
+class BG3VariantDialog(QDialog):
+
+    INSTALL_ALL = ""
+
+    @classmethod
+    def choose(cls, groups, parent=None):
+        dialog = cls(groups, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return cls.INSTALL_ALL if dialog._install_all else dialog.selected()
+
+    def __init__(self, groups, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Baldur's Gate 3 - choose a variant")
+        self._buttons = {}
+        self._install_all = False
+
+        layout = QVBoxLayout(self)
+        heading = QLabel(
+            f"This archive contains {len(groups)} builds of the same mod in separate "
+            "folders.\nThey normally share one UUID, so only one should be installed."
+        )
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+
+        holder = QWidget()
+        holder_layout = QVBoxLayout(holder)
+        group = QButtonGroup(self)
+        for index, path in enumerate(sorted(groups)):
+            pak = groups[path][0]
+            folder = path.rsplit("/", 1)[-1]
+            label = folder or pak.name()
+            detail = pak.name()
+            if folder and folder.casefold() in detail.casefold():
+                detail = ""
+            elif len(detail) > 58:
+                detail = detail[:57] + "…"
+            button = QRadioButton(f"{label}\n{detail}" if detail else label, holder)
+            button.setChecked(index == 0)
+            group.addButton(button)
+            holder_layout.addWidget(button)
+            self._buttons[button] = path
+        holder_layout.addStretch(1)
+
+        area = QScrollArea()
+        area.setWidget(holder)
+        area.setWidgetResizable(True)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setMaximumHeight(300)
+        layout.addWidget(area)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        install_all = buttons.addButton(
+            "Install all", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        install_all.setToolTip(
+            "Install every variant. Only useful if these are not actually variants."
+        )
+        install_all.clicked.connect(self._accept_all)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.adjustSize()
+
+    def _accept_all(self):
+        self._install_all = True
+        self.accept()
+
+    def selected(self):
+        for button, path in self._buttons.items():
+            if button.isChecked():
+                return path
+        return None
+
 
 class BG3ModDataChecker(BasicModDataChecker):
     def __init__(self):
@@ -194,6 +335,15 @@ class BG3ModDataChecker(BasicModDataChecker):
     def dataLooksValid(
         self, filetree: mobase.IFileTree
     ) -> mobase.ModDataChecker.CheckReturn:
+        try:
+            return self._data_looks_valid(filetree)
+        except Exception as e:
+            qDebug(f"BG3: layout check failed, treating as invalid: {e}")
+            return mobase.ModDataChecker.INVALID
+
+    def _data_looks_valid(
+        self, filetree: mobase.IFileTree
+    ) -> mobase.ModDataChecker.CheckReturn:
         parent = filetree.parent()
         if parent is not None and self.dataLooksValid(parent) is self.FIXABLE:
             return self.FIXABLE
@@ -215,11 +365,50 @@ class BG3ModDataChecker(BasicModDataChecker):
         return status
 
     def fix(self, filetree: mobase.IFileTree) -> mobase.IFileTree:
-        filetree = super().fix(filetree)
-        self._move_unsorted_bins(filetree, filetree)
-        self._move_unsorted_paks(filetree, filetree)
-        self._remove_empty_dirs(filetree)
+        try:
+            filetree = super().fix(filetree)
+            self._move_unsorted_bins(filetree, filetree)
+            self._move_unsorted_paks(filetree, filetree)
+            self._delete_junk(filetree)
+            self._remove_empty_dirs(filetree)
+        except Exception as e:
+            qDebug(f"BG3: fixing the mod layout failed part way through: {e}")
         return filetree
+
+    def _delete_junk(self, filetree: mobase.IFileTree):
+        rp = self._regex_patterns
+        for entry in list(filetree):
+            if rp.delete.match(entry.name()):
+                entry.detach()
+            elif isinstance(entry, mobase.IFileTree):
+                self._delete_junk(entry)
+
+    def _variant_pak_groups(self, filetree: mobase.IFileTree):
+        groups = {}
+
+        def walk(node, path):
+            for entry in node:
+                if isinstance(entry, mobase.IFileTree):
+                    walk(entry, f"{path}/{entry.name()}" if path else entry.name())
+                elif entry.name().casefold().endswith(".pak"):
+                    groups.setdefault(path, []).append(entry)
+
+        walk(filetree, "")
+        if len(groups) < 2 or any(len(paks) != 1 for paks in groups.values()):
+            return {}
+        if any(not path for path in groups):
+            return {}
+        parents = {path.rsplit("/", 1)[0] if "/" in path else "" for path in groups}
+        if len(parents) != 1:
+            return {}
+        return groups
+
+    def keep_only_variant(self, groups, chosen):
+        for path, paks in groups.items():
+            if path == chosen:
+                continue
+            for pak in paks:
+                pak.detach()
 
     def _contains_unsorted_pak(self, filetree: mobase.IFileTree, inside_pak_files=False):
         current_inside_pak_files = inside_pak_files or filetree.name().casefold() == "pak_files"
@@ -269,10 +458,10 @@ class BG3ModDataChecker(BasicModDataChecker):
             if len(entry) == 0:
                 entry.detach()
 
-class BG3Game(BasicGame, mobase.IPluginFileMapper):
+class BG3Game(BasicGame, mobase.IPluginFileMapper, mobase.IPluginInstallerSimple):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "1.1.3"
+    Version = "1.2.0"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -281,8 +470,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
 
     GameBinary = r"bin\bg3.exe"
     GameDataPath = r"Data"
-    GameSavesDirectory = "%USERPROFILE%/AppData/Local/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story"
-    GameDocumentsDirectory = "%USERPROFILE%/AppData/Local/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/"
+    GameSavesDirectory = "%GAME_DOCUMENTS%/Savegames/Story"
     GameSaveExtension = "lsv"
 
     GameNexusId = 3474
@@ -298,10 +486,6 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
             "pattern": "*",
             "pathName": "Script Extender"
         },
-        "LevelCache": {
-            "pattern": "*",
-            "pathName": "LevelCache"
-        },
         "Root": {
             "pattern": "*",
             "pathName": "",
@@ -312,10 +496,15 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
     def __init__(self):
         BasicGame.__init__(self)
         mobase.IPluginFileMapper.__init__(self)
+        mobase.IPluginInstallerSimple.__init__(self)
+        self._data_checker = BG3ModDataChecker()
+        self._install_parent = None
+        self._quick_options = None
 
     def init(self, organizer: mobase.IOrganizer) -> bool:
         super().init(organizer)
-        self._register_feature(BG3ModDataChecker())
+        self._quick_options = BG3QuickOptions(organizer, self.name(), self.appDataDirectory)
+        self._register_feature(self._data_checker)
         self._register_feature(BG3DataContent(organizer))
         self._register_feature(BasicGameSaveGameInfo(
             lambda s: s.with_suffix(".webp")
@@ -329,29 +518,129 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         self._organizer.modList().onModInstalled(self.onModInstalled)  # on Mod Installed
         self._organizer.modList().onModRemoved(self.onModRemoved)  # on Mod Removed
 
-        # self._organizer.onNextRefresh(self.onRefresh)
-
         self._organizer.onUserInterfaceInitialized(self.onUserInterfaceLoad) # on Mod Organizer 2 Load
         self._organizer.onProfileCreated(self.onProfileCreated) # on Profile Created
 
-        return True
-    
-    def onRefresh(self):
-        hasDependencies = check_bg3_paths(self._organizer)
+        try:
+            modSettings.set_native_reader(
+                bool(self._organizer.pluginSetting(self.name(), "use_native_pak_reader"))
+            )
+        except Exception as e:
+            qDebug(f"BG3: could not read use_native_pak_reader, defaulting to on: {e}")
 
-        if hasDependencies is False:
-            return True
-        
         return True
+
+
+    def priority(self) -> int:
+        return 120
+
+    def isManualInstaller(self) -> bool:
+        return False
+
+    def setParentWidget(self, widget):
+        self._install_parent = widget
+
+    def isArchiveSupported(self, tree) -> bool:
+        try:
+            return bool(self._data_checker._variant_pak_groups(tree))
+        except Exception as e:
+            qDebug(f"BG3: variant probe failed: {e}")
+            return False
+
+    def install(self, name, tree, version, nexus_id):
+        try:
+            groups = self._data_checker._variant_pak_groups(tree)
+            if not groups:
+                return mobase.InstallResult.NOT_ATTEMPTED
+
+            chosen = BG3VariantDialog.choose(groups, self._install_parent)
+            if chosen is None:
+                qDebug("BG3: variant picker closed; installation cancelled.")
+                return mobase.InstallResult.CANCELED
+
+            if chosen == BG3VariantDialog.INSTALL_ALL:
+                qDebug("BG3: installing every variant on request.")
+            else:
+                self._data_checker.keep_only_variant(groups, chosen)
+                qDebug(f"BG3: keeping only the '{chosen}' variant.")
+
+            return mobase.InstallResult.NOT_ATTEMPTED
+        except Exception as e:
+            qDebug(f"BG3: variant install failed, deferring to other installers: {e}")
+            return mobase.InstallResult.NOT_ATTEMPTED
+
+    def settings(self) -> list[mobase.PluginSetting]:
+        return super().settings() + [
+            mobase.PluginSetting(
+                "list_override_only_mods",
+                "List override-only mods in modsettings.lsx, matching BG3 Mod Manager. "
+                "Changes which mods the game loads.",
+                False,
+            ),
+            mobase.PluginSetting(
+                "use_native_pak_reader",
+                "When Divine.exe can't read a .pak file, for example because .NET 8 is "
+                "missing, read it with the plugin's built-in reader instead. Turn off to "
+                "use Divine only.",
+                True,
+            ),
+            mobase.PluginSetting(
+                "script_extender_settings_editor",
+                "(Experimental) Show the Script Extender box in the BG3 tab, with an "
+                "editor for ScriptExtenderSettings.json and ScriptExtenderUpdaterConfig.json.",
+                False,
+            ),
+        ]
+
+    def appDataDirectory(self) -> Path:
+        local_appdata = os.getenv("LOCALAPPDATA") or str(
+            Path(QDir.homePath()) / "AppData" / "Local"
+        )
+        return Path(local_appdata) / "Larian Studios" / "Baldur's Gate 3"
+
+    def documentsDirectory(self) -> QDir:
+        return QDir(str(self.appDataDirectory() / "PlayerProfiles" / "Public"))
+
+    def _include_override_only_modules(self) -> bool:
+        try:
+            return bool(self._organizer.pluginSetting(self.name(), "list_override_only_mods"))
+        except Exception:
+            return False
 
     def onAboutToRun(self, executable: str):
-        modSettings.generate_mod_settings(self._organizer, self._organizer.modList(), self._organizer.profile())
+        try:
+            generated = modSettings.generate_mod_settings(
+                self._organizer,
+                self._organizer.modList(),
+                self._organizer.profile(),
+                self._include_override_only_modules(),
+            )
+        except Exception as e:
+            self._quick_options.report_modsettings_failure(str(e))
+            generated = False
+
+        if generated:
+            self._quick_options.log_modsettings_result()
+        else:
+            try:
+                modSettings.ensure_mod_settings_exists(self._organizer.profile())
+            except Exception as e:
+                qDebug(f"BG3: could not ensure modsettings.lsx exists: {e}")
+
         return True
 
+
     def onFinishedRun(self, executable: str, exit_code: int, error: str = ""):
+        try:
+            self._drain_appdata_to_overwrite()
+        except Exception as e:
+            qDebug(f"BG3: post-run cleanup failed: {e}")
+        return True
+
+    def _drain_appdata_to_overwrite(self):
         # Handle Script Extender files
-        appdata_path = Path(os.getenv("LOCALAPPDATA")) / "Larian Studios" / "Baldur's Gate 3"
-        
+        appdata_path = self.appDataDirectory()
+
         # Handle Script Extender configs
         se_path = appdata_path / "Script Extender"
         if se_path.exists() and any(se_path.iterdir()):
@@ -362,13 +651,13 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                 if file.is_file():
                     rel_path = file.relative_to(se_path)
                     dest_file = overwrite_path / rel_path
-                    
+
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    
+
                     try:
                         dest_file.write_bytes(file.read_bytes())
                         file.unlink()
-                        
+
                         parent = file.parent
                         while parent != se_path:
                             try:
@@ -376,46 +665,71 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                                 parent = parent.parent
                             except OSError:
                                 break
-                                
+
                     except Exception as e:
                         qDebug(f"Failed to move {file} to overwrite: {str(e)}")
 
-        # Handle LevelCache files
-        levelcache_path = appdata_path / "LevelCache"
-        if levelcache_path.exists() and any(levelcache_path.iterdir()):
-            overwrite_path = Path(self._organizer.overwritePath()) / "LevelCache"
-            overwrite_path.mkdir(parents=True, exist_ok=True)
+        self._prune_level_cache()
 
-            for file in levelcache_path.glob("**/*"):
-                if file.is_file():
-                    rel_path = file.relative_to(levelcache_path)
-                    dest_file = overwrite_path / rel_path
-                    
-                    if not dest_file.exists():
-                        dest_file.parent.mkdir(parents=True, exist_ok=True)
-                        try:
-                            # Copy file to overwrite but don't delete the original
-                            dest_file.write_bytes(file.read_bytes())
-                        except Exception as e:
-                            qDebug(f"Failed to copy {file} to overwrite: {str(e)}")
+    def _level_cache_path(self) -> Path:
+        return Path(self._organizer.overwritePath()) / "LevelCache"
 
-        return True
-    
-    def onModInstalled(self, mod: str):
-        modSettings.mod_installed(self._organizer, self._organizer.modList(), self._organizer.profile(), mod)
+    def _prune_level_cache(self):
+        level_cache = self._level_cache_path()
+        if not level_cache.is_dir():
+            return
+
+        removed = 0
+        freed = 0
+        for entry in level_cache.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                shutil.rmtree(entry)
+            except OSError as e:
+                qDebug(f"BG3: kept LevelCache/{entry.name}: {e}")
+                continue
+            removed += 1
+            freed += size
+
+        if removed:
+            qDebug(f"BG3: removed {removed} LevelCache folder(s), freed {freed / 1e6:.0f} MB.")
+            folders = "folder" if removed == 1 else "folders"
+            self._quick_options.log(
+                f"Cleaned up {removed} leftover cache {folders}, {freed / 1e6:.0f} MB freed."
+            )
+
+    def onModInstalled(self, mod):
+        name = mod.name() if hasattr(mod, "name") else str(mod)
+        before = modSettings.native_reader_stats()
+        self._quick_options.invalidate_pak_cache()
+        try:
+            modSettings.mod_installed(
+                self._organizer, self._organizer.modList(), self._organizer.profile(), mod
+            )
+        except Exception as e:
+            qDebug(f"BG3: metadata scan failed for {name}: {e}")
+            self._quick_options.log(f"{name}: could not read the mod's paks.")
+            return True
+        self._quick_options.log_reader_activity(name, before)
+        self._quick_options.notify_mods_changed([name])
         return True
 
     def onModRemoved(self, mod):
+        self._quick_options.invalidate_pak_cache()
         modSettings.mod_removed(self._organizer, self._organizer.profile(), mod)
         return True
 
     def onUserInterfaceLoad(self, window):
-        hasDependencies = check_bg3_paths(self._organizer)
-
-        if hasDependencies is False:
-            return True
-        
+        try:
+            if check_bg3_paths(self._organizer) is False:
+                return True
+            self._quick_options.install_tab(window)
+        except Exception as e:
+            qDebug(f"BG3: interface setup failed: {e}")
         return True
+
 
     def onProfileCreated(self, profile: mobase.IProfile):
         return True
@@ -479,7 +793,7 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         map = []
         modlist = self._organizer.modList()
 
-        appdata_path = QDir(os.getenv("LOCALAPPDATA") + "/Larian Studios/Baldur's Gate 3/")
+        appdata_path = QDir(str(self.appDataDirectory()))
 
         required_dirs = ["Script Extender", "Mods", "LevelCache"]
         for dir_name in required_dirs:
@@ -522,6 +836,18 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
                         create_target=True,
                     ))
 
+        level_cache = self._level_cache_path()
+        try:
+            level_cache.mkdir(parents=True, exist_ok=True)
+            map.append(mobase.Mapping(
+                source=str(level_cache),
+                destination=appdata_path.absoluteFilePath("LevelCache"),
+                is_directory=True,
+                create_target=True,
+            ))
+        except OSError as e:
+            qDebug(f"BG3: could not map LevelCache: {e}")
+
         map.append(mobase.Mapping(
             source=self._organizer.profile().absolutePath() + "/modsettings.lsx",
             destination=os.path.join(appdata_path.absoluteFilePath("PlayerProfiles/Public"), "modsettings.lsx"),
@@ -556,88 +882,3 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper):
         if overwrite_root_bin.exists():
             paths.append(overwrite_root_bin)
         return paths
-
-def check_bg3_paths(organizer):
-    base_dir = Path(__file__).parent / "baldursgate3"
-    temp_dir = base_dir / "temp_extracted"
-    tools_dir = base_dir / "tools"
-    divine_exe = tools_dir / "Divine.exe"
-
-    if tools_dir.exists() and divine_exe.exists():
-        return True
-
-    main_window = organizer.mainWindow() if hasattr(organizer, "mainWindow") else None
-    msg_box = QMessageBox(main_window)
-    msg_box.setWindowTitle("Baldur's Gate 3 Plugin - Missing dependencies")
-    msg_box.setText("LSLib Tools are missing.\nThese are necessary for the plugin to work correctly.")
-    download_btn = msg_box.addButton("Download", QMessageBox.ButtonRole.DestructiveRole)
-    exit_btn = msg_box.addButton("Exit", QMessageBox.ButtonRole.ActionRole)
-    msg_box.setIcon(QMessageBox.Icon.Warning)
-    msg_box.exec()
-
-    if msg_box.clickedButton() == exit_btn:
-        subprocess.Popen(["taskkill", "/im", "ModOrganizer.exe", "/f"], creationflags=subprocess.CREATE_NO_WINDOW)
-        return False
-
-    progress = QProgressDialog("Downloading LSLib...", "Cancel", 0, 100, main_window)
-    progress.setWindowTitle("BG3 Plugin - Downloading")
-    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-    progress.show()
-
-    try:
-        release_url = "https://api.github.com/repos/Norbyte/lslib/releases/latest"
-        with urllib.request.urlopen(release_url) as response:
-            release_data = json.loads(response.read().decode("utf-8"))
-        asset = next(
-            (
-                a for a in release_data.get("assets", [])
-                if a.get("name", "").lower().endswith(".zip")
-                and "exporttool" in a.get("name", "").lower()
-            ),
-            None,
-        )
-        if not asset:
-            raise RuntimeError("Could not find an ExportTool zip in the latest LSLib release.")
-
-        zip_url = asset["browser_download_url"]
-        zip_filename = asset["name"]
-        zip_path = Path(tempfile.gettempdir()) / zip_filename
-
-        def reporthook(block_num, block_size, total_size):
-            if total_size > 0:
-                read_so_far = block_num * block_size
-                percent = int(read_so_far * 100 / total_size)
-                progress.setValue(min(percent, 100))
-                QApplication.processEvents()
-
-        urllib.request.urlretrieve(zip_url, str(zip_path), reporthook)
-
-        tools_dir.mkdir(parents=True, exist_ok=True)
-
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            for archive_info in zip_ref.infolist():
-                if archive_info.is_dir():
-                    continue
-                file_name = Path(archive_info.filename).name
-                if not file_name:
-                    continue
-                extracted_path = Path(zip_ref.extract(archive_info, temp_dir))
-                shutil.copy2(extracted_path, tools_dir / file_name)
-
-        progress.setValue(100)
-
-        try:
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
-        except Exception as cleanup_err:
-            qDebug(f"Failed to clean up temp_extracted: {cleanup_err}")
-
-    except Exception as e:
-        qDebug(f"Download failed: {e}")
-        err = QMessageBox(main_window)
-        err.setIcon(QMessageBox.Icon.Critical)
-        err.setText(f"Failed to download LSLib tools:\n{str(e)}")
-        err.exec()
-        return False
-
-    return True
