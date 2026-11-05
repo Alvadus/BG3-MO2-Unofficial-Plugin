@@ -411,7 +411,7 @@ class BG3ModDataChecker(BasicModDataChecker):
                 pak.detach()
 
     def _contains_unsorted_pak(self, filetree: mobase.IFileTree, inside_pak_files=False):
-        current_inside_pak_files = inside_pak_files or filetree.name().casefold() == "pak_files"
+        current_inside_pak_files = inside_pak_files or filetree.name().casefold() in ("pak_files", "root")
         for entry in filetree:
             if isinstance(entry, mobase.IFileTree):
                 if self._contains_unsorted_pak(entry, current_inside_pak_files):
@@ -432,7 +432,7 @@ class BG3ModDataChecker(BasicModDataChecker):
         return False
 
     def _move_unsorted_paks(self, root: mobase.IFileTree, filetree: mobase.IFileTree, inside_pak_files=False):
-        current_inside_pak_files = inside_pak_files or filetree.name().casefold() == "pak_files"
+        current_inside_pak_files = inside_pak_files or filetree.name().casefold() in ("pak_files", "root")
         for entry in list(filetree):
             if isinstance(entry, mobase.IFileTree):
                 self._move_unsorted_paks(root, entry, current_inside_pak_files)
@@ -461,7 +461,7 @@ class BG3ModDataChecker(BasicModDataChecker):
 class BG3Game(BasicGame, mobase.IPluginFileMapper, mobase.IPluginInstallerSimple):
     Name = "Baldur's Gate 3 Unofficial Support Plugin"
     Author = "Alvadus"
-    Version = "1.2.0"
+    Version = "1.2.1"
 
     GameName = "Baldur's Gate 3"
     GameShortName = "baldursgate3"
@@ -608,16 +608,28 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper, mobase.IPluginInstallerSimple
             return False
 
     def onAboutToRun(self, executable: str):
+        progress = self._quick_options.launch_progress()
         try:
             generated = modSettings.generate_mod_settings(
                 self._organizer,
                 self._organizer.modList(),
                 self._organizer.profile(),
                 self._include_override_only_modules(),
+                progress.report,
             )
+        except modSettings.LaunchCancelled as e:
+            progress.close()
+            qDebug(f"BG3: launch cancelled, {e}")
+            self._quick_options.log(
+                "Launch cancelled. Paks read so far are saved and won't be read again."
+            )
+            return False
         except Exception as e:
+            progress.close()
             self._quick_options.report_modsettings_failure(str(e))
             generated = False
+        finally:
+            progress.close()
 
         if generated:
             self._quick_options.log_modsettings_result()
@@ -723,6 +735,8 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper, mobase.IPluginInstallerSimple
 
     def onUserInterfaceLoad(self, window):
         try:
+            if not self.isActive():
+                return True
             if check_bg3_paths(self._organizer) is False:
                 return True
             self._quick_options.install_tab(window)
@@ -826,6 +840,11 @@ class BG3Game(BasicGame, mobase.IPluginFileMapper, mobase.IPluginInstallerSimple
 
             # Handle files from overwrite directory
             overwrite_path = Path(self._organizer.overwritePath()) / mod_type
+            if mod_type == "Root":
+                try:
+                    (overwrite_path / "bin").mkdir(parents=True, exist_ok=True)
+                except OSError as e:
+                    qDebug(f"BG3: could not create overwrite/Root/bin: {e}")
             if overwrite_path.exists():
                 overwrite_files = list(overwrite_path.glob(mod_pattern))
                 for file in overwrite_files:

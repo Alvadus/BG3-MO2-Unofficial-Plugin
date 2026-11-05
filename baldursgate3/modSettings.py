@@ -130,6 +130,10 @@ class ModSettingsWriteError(Exception):
     pass
 
 
+class LaunchCancelled(Exception):
+    pass
+
+
 def _discard(path: Path):
     try:
         path.unlink()
@@ -431,7 +435,7 @@ def _deserialize_metadata_section(section):
         if key in {"Override", "LoadOrder", "HasOsiris", "HasScriptExtender"}:
             metadata[key] = value.lower() == "true"
             continue
-        if key in {"FileMD5", "CacheVersion"}:
+        if key in {"FileMD5", "FileSize", "FileModified", "CacheVersion"}:
             metadata[key] = value
             continue
         if "." in key:
@@ -450,6 +454,9 @@ def _serialize_metadata_section(section, pak_name, metadata):
     section["HasOsiris"] = str(bool(metadata.get("HasOsiris", False))).lower()
     section["HasScriptExtender"] = str(bool(metadata.get("HasScriptExtender", False))).lower()
     section["FileMD5"] = str(metadata.get("FileMD5", ""))
+    if metadata.get("FileSize"):
+        section["FileSize"] = str(metadata["FileSize"])
+        section["FileModified"] = str(metadata.get("FileModified", ""))
 
     for attr_id in _DEFAULT_ATTRIBUTES:
         attr_data = metadata.get(attr_id)
@@ -525,7 +532,7 @@ def _should_list_module(metadata, include_override_only):
     return include_override_only and bool(_attr_value(metadata, "UUID"))
 
 
-def _collect_active_modules(modlist, profile, include_override_only):
+def _collect_active_modules(modlist, profile, include_override_only, progress=None):
     mod_settings = {}
     active_pak_count = 0
     active_module_count = 0
@@ -557,11 +564,18 @@ def _collect_active_modules(modlist, profile, include_override_only):
             for file in mod_files:
                 cache_key = _mod_cache_section(file.name)
                 cached_metadata = cached_files.get(cache_key)
+                state = "changed"
                 if cached_metadata and _cache_is_current(cached_metadata):
+                    state = _signature_state(cached_metadata, file)
+                if state == "same":
                     if _should_list_module(cached_metadata, include_override_only):
                         mod_settings.setdefault(modName, {})[cache_key] = cached_metadata
                     else:
                         skipped_override_mods.add(modName)
+                elif state in ("missing", "unknown"):
+                    futures.append(
+                        executor.submit(_verify_cached_metadata, modName, file, cached_metadata, mod, state == "unknown")
+                    )
                 else:
                     if cached_metadata:
                         stale_cache_entries += 1
@@ -572,19 +586,21 @@ def _collect_active_modules(modlist, profile, include_override_only):
         if stale_cache_entries:
             print(f"Rebuilding outdated metadata cache for {stale_cache_entries} pak(s).")
 
-        for future in as_completed(futures):
+        for done, future in enumerate(as_completed(futures), 1):
             try:
                 meta = future.result()
-                if meta and meta["metadata"]:
+                if meta and meta["metadata"] and _is_mod_active(modlist, meta["modName"]):
                     m = meta["metadata"]
-                    if not _is_mod_active(modlist, meta["modName"]):
-                        continue
                     if _should_list_module(m, include_override_only):
                         mod_settings.setdefault(meta["modName"], {})[meta["file"]] = meta["metadata"]
                     else:
                         skipped_override_mods.add(meta["modName"])
             except Exception as e:
                 print(f"Error processing file: {e}")
+            if not _report(progress, done, len(futures), ""):
+                for pending in futures:
+                    pending.cancel()
+                raise LaunchCancelled(f"stopped after {done} of {len(futures)} pak(s)")
 
     return {
         "modules": mod_settings,
@@ -670,10 +686,11 @@ def generate_mod_settings(
     modlist: mobase.IModList,
     profile: mobase.IProfile,
     include_override_only=False,
+    progress=None,
 ):
     global _last_override_skip
     mod_settings_file = Path(profile.absolutePath()) / "modsettings.lsx"
-    collected = _collect_active_modules(modlist, profile, include_override_only)
+    collected = _collect_active_modules(modlist, profile, include_override_only, progress)
     mod_settings = _prefer_loose_modules(collected["modules"])
 
     fallback_modules = []
@@ -1148,9 +1165,45 @@ def _cache_is_current(metadata):
     return version == 2 and not (metadata.get("Override") and not metadata.get("LoadOrder"))
 
 
-def cached_metadata_matches_file(metadata, pak_path: Path):
+def _signature_fields(pak_path: Path):
+    signature = get_file_signature(pak_path)
+    return {"FileSize": str(signature["Size"]), "FileModified": str(signature["Modified"])}
+
+
+def _signature_state(metadata, pak_path: Path):
+    try:
+        current = _signature_fields(pak_path)
+    except OSError:
+        return "changed"
+    if not metadata.get("FileSize"):
+        return "missing"
+    if metadata["FileSize"] != current["FileSize"]:
+        return "changed"
+    if metadata.get("FileModified") == current["FileModified"]:
+        return "same"
+    return "unknown"
+
+
+def _md5_matches(metadata, pak_path: Path):
     cached_md5 = metadata.get("FileMD5")
     return bool(cached_md5) and cached_md5 == get_md5(pak_path)
+
+
+def cached_metadata_matches_file(metadata, pak_path: Path):
+    state = _signature_state(metadata, pak_path)
+    if state in ("same", "changed"):
+        return state == "same"
+    return _md5_matches(metadata, pak_path)
+
+
+def _verify_cached_metadata(mod_name, file, cached, mod, check_md5):
+    if check_md5 and not _md5_matches(cached, file):
+        return _get_metadata(mod_name, file, None, True, mod)
+    stamped = dict(cached)
+    stamped.update(_signature_fields(file))
+    with cache_lock:
+        _write_mod_metadata_cache(file, stamped, mod)
+    return _metadata_result(mod_name, file.name, stamped)
 
 def _iter_pak_data_paths(lines):
     if isinstance(lines, str):
@@ -1414,6 +1467,7 @@ def _get_metadata(mod_name, file, profile_path, refresh_cache=False, mod=None):
         _count_reader("native")
         _record_fallback(file.name)
 
+    meta_data.update(_signature_fields(file))
     with cache_lock:
         _write_mod_metadata_cache(file, meta_data, mod)
     return _metadata_result(mod_name, file.name, meta_data)

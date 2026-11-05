@@ -644,6 +644,9 @@ class BG3QuickOptions:
             message += f" {overrides} pure override mod(s) are active but not listed."
         self.log(message)
 
+    def launch_progress(self):
+        return _LaunchProgress(self._mo2_main_window())
+
     def report_modsettings_failure(self, reason):
         message = (
             f"modsettings.lsx could not be updated:\n\n{reason}\n\n"
@@ -653,3 +656,34 @@ class BG3QuickOptions:
         qDebug(f"BG3: {message}")
         self.log(f"modsettings.lsx generation failed: {reason}")
         QMessageBox.warning(self._mo2_main_window(), "Baldur's Gate 3", message)
+
+
+class _LaunchProgress:
+    def __init__(self, parent):
+        self._parent = parent
+        self._dialog = None
+
+    def report(self, done, total, label):
+        try:
+            if self._dialog is None:
+                dialog = QProgressDialog("", "Cancel launch", 0, total, self._parent)
+                dialog.setWindowTitle("Baldur's Gate 3")
+                dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+                dialog.setMinimumDuration(1000)
+                dialog.setAutoClose(False)
+                dialog.setAutoReset(False)
+                self._dialog = dialog
+            self._dialog.setMaximum(total)
+            self._dialog.setLabelText(f"Reading pak files for the load order ({done}/{total})...")
+            self._dialog.setValue(done)
+            QApplication.processEvents()
+            return not self._dialog.wasCanceled()
+        except Exception as e:
+            qDebug(f"BG3: launch progress failed: {e}")
+        return True
+
+    def close(self):
+        if self._dialog is not None:
+            self._dialog.close()
+            self._dialog.deleteLater()
+            self._dialog = None
